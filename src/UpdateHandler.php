@@ -1,0 +1,996 @@
+<?php
+
+namespace App;
+
+use App\Services\SettingsService;
+use App\Services\StatsService;
+use App\Services\RewardService;
+use App\Services\GoogleSheetsService;
+use App\Reports\RewardSheet;
+use App\Reports\RewardCsv;
+use DateTimeImmutable;
+use DateTimeZone;
+
+class UpdateHandler
+{
+    private Database $db;
+    private Telegram $tg;
+    private array $config;
+    private SettingsService $settings;
+    private StatsService $stats;
+    private RewardService $rewards;
+    private RewardSheet $rewardSheet;
+    private RewardCsv $rewardCsv;
+    private GoogleSheetsService $googleSheets;
+
+    public function __construct(Database $db, Telegram $tg, array $config)
+    {
+        $this->db = $db;
+        $this->tg = $tg;
+        $this->config = $config;
+        $this->settings = new SettingsService($db, $config);
+        $this->stats = new StatsService($db, $this->settings, $config);
+        $this->rewards = new RewardService($config);
+        $this->rewardSheet = new RewardSheet($this->stats, $this->rewards, $config);
+        $this->rewardCsv = new RewardCsv($this->stats, $this->rewards);
+        $this->googleSheets = new GoogleSheetsService($config);
+    }
+
+    public function handleUpdate(array $update): void
+    {
+        if (isset($update['message'])) {
+            $this->handleMessage($update['message']);
+            return;
+        }
+
+        if (isset($update['chat_member'])) {
+            $this->handleChatMember($update['chat_member']);
+        }
+    }
+
+    private function handleMessage(array $message): void
+    {
+        if (!isset($message['chat'])) {
+            return;
+        }
+
+        $chat = $message['chat'];
+        $chatId = $chat['id'];
+        $chatType = $chat['type'] ?? 'private';
+
+        $this->upsertChat($chat);
+        $this->settings->get($chatId);
+
+        if (isset($message['from'])) {
+            $from = $message['from'];
+            if (!empty($from['is_bot'])) {
+                return;
+            }
+            $this->upsertUser($from);
+            $this->ensureChatMember($chatId, $from['id']);
+        }
+
+        if (isset($message['new_chat_members'])) {
+            foreach ($message['new_chat_members'] as $member) {
+                $this->upsertUser($member);
+                $this->ensureChatMember($chatId, $member['id']);
+                $this->recordMembershipJoin($chatId, $member['id'], $message['date']);
+            }
+        }
+
+        if (isset($message['left_chat_member'])) {
+            $member = $message['left_chat_member'];
+            $this->upsertUser($member);
+            $this->ensureChatMember($chatId, $member['id']);
+            $this->recordMembershipLeave($chatId, $member['id'], $message['date']);
+        }
+
+        if ($this->isRegularMessage($message)) {
+            $this->recordMessage($chatId, $message);
+        }
+
+        if (!isset($message['text'])) {
+            return;
+        }
+
+        $parsed = $this->parseCommand($message['text']);
+        if (!$parsed) {
+            return;
+        }
+
+        $this->handleCommand($chatId, $message, $parsed['command'], $parsed['args'], $chatType);
+    }
+
+    private function handleChatMember(array $chatMemberUpdate): void
+    {
+        if (!isset($chatMemberUpdate['chat'], $chatMemberUpdate['new_chat_member'], $chatMemberUpdate['old_chat_member'])) {
+            return;
+        }
+
+        $chat = $chatMemberUpdate['chat'];
+        $chatId = $chat['id'];
+        $this->upsertChat($chat);
+        $this->settings->get($chatId);
+
+        $new = $chatMemberUpdate['new_chat_member'];
+        $old = $chatMemberUpdate['old_chat_member'];
+        $user = $new['user'] ?? $old['user'] ?? null;
+
+        if (!$user) {
+            return;
+        }
+
+        $this->upsertUser($user);
+        $this->ensureChatMember($chatId, $user['id']);
+
+        $joinedStatuses = ['member', 'administrator', 'creator'];
+        $leftStatuses = ['left', 'kicked'];
+
+        $oldStatus = $old['status'] ?? null;
+        $newStatus = $new['status'] ?? null;
+
+        $timestamp = $chatMemberUpdate['date'] ?? time();
+
+        if (in_array($oldStatus, $leftStatuses, true) && in_array($newStatus, $joinedStatuses, true)) {
+            $this->recordMembershipJoin($chatId, $user['id'], $timestamp);
+        }
+
+        if (in_array($newStatus, $leftStatuses, true)) {
+            $this->recordMembershipLeave($chatId, $user['id'], $timestamp);
+        }
+    }
+
+    private function handleCommand(int|string $chatId, array $message, string $command, string $args, string $chatType): void
+    {
+        $from = $message['from'];
+        $userId = $from['id'];
+        $isPrivate = $chatType === 'private';
+
+        $privateCommands = [
+            'stats', 'leaderboard', 'report', 'reportcsv', 'exportgsheet',
+            'setbudget', 'settimezone', 'setactivity', 'autoreport', 'mychats',
+        ];
+        $groupCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
+
+        if ($isPrivate) {
+            if (in_array($command, ['help', 'start'], true)) {
+                $this->tg->sendMessage($chatId, $this->helpText(true));
+                return;
+            }
+
+            if (in_array($command, $groupCommands, true)) {
+                $this->tg->sendMessage($chatId, 'This command must be used in the group chat.');
+                return;
+            }
+
+            if ($command === 'mychats') {
+                $this->handleMyChats($chatId, $userId);
+                return;
+            }
+
+            if (in_array($command, $privateCommands, true)) {
+                [$targetChatId, $cleanArgs] = $this->resolveTargetChatId($userId, $chatId, $args);
+                if (!$targetChatId) {
+                    return;
+                }
+
+                if (!$this->isAuthorized($targetChatId, $userId)) {
+                    $this->tg->sendMessage($chatId, 'You do not have permission for that chat.');
+                    return;
+                }
+
+                switch ($command) {
+                    case 'stats':
+                        $this->handleStats($chatId, $targetChatId, $message, $cleanArgs);
+                        return;
+                    case 'leaderboard':
+                        $this->handleLeaderboard($chatId, $targetChatId, $cleanArgs);
+                        return;
+                    case 'report':
+                        $this->handleReport($chatId, $targetChatId, $cleanArgs);
+                        return;
+                    case 'reportcsv':
+                        $this->handleReportCsv($chatId, $targetChatId, $cleanArgs);
+                        return;
+                    case 'exportgsheet':
+                        $this->handleExportGoogleSheet($chatId, $targetChatId, $cleanArgs);
+                        return;
+                    case 'setbudget':
+                        $this->handleSetBudget($chatId, $targetChatId, $cleanArgs);
+                        return;
+                    case 'settimezone':
+                        $this->handleSetTimezone($chatId, $targetChatId, $cleanArgs);
+                        return;
+                    case 'setactivity':
+                        $this->handleSetActivity($chatId, $targetChatId, $cleanArgs);
+                        return;
+                    case 'autoreport':
+                        $this->handleAutoReport($chatId, $targetChatId, $cleanArgs);
+                        return;
+                }
+            }
+
+            return;
+        }
+
+        // Group chat behavior
+        if (in_array($command, ['help', 'start'], true)) {
+            $this->tg->sendMessage($chatId, $this->helpText(false));
+            return;
+        }
+
+        if (in_array($command, $privateCommands, true)) {
+            $this->tg->sendMessage($chatId, 'Please DM me to use analytics commands.');
+            return;
+        }
+
+        if ($command === 'mod') {
+            if (!$this->isAuthorized($chatId, $userId)) {
+                $this->tg->sendMessage($chatId, 'You do not have permission to manage mods.');
+                return;
+            }
+            $this->handleModCommand($chatId, $message, $args);
+            return;
+        }
+
+        if (in_array($command, ['warn', 'mute', 'ban', 'unmute', 'unban'], true)) {
+            if (!$this->isAuthorized($chatId, $userId)) {
+                $this->tg->sendMessage($chatId, 'You do not have permission to use moderation commands.');
+                return;
+            }
+            $this->handleModerationCommand($chatId, $message, $command, $args);
+        }
+    }
+
+    private function handleStats(int|string $responseChatId, int|string $chatId, array $message, string $args): void
+    {
+        $targetUserId = $message['from']['id'];
+        $targetUsername = null;
+        $month = null;
+
+        if (isset($message['reply_to_message']['from'])) {
+            $targetUserId = $message['reply_to_message']['from']['id'];
+            $targetUsername = $message['reply_to_message']['from']['username'] ?? null;
+        }
+
+        $tokens = preg_split('/\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^\d{4}-\d{2}$/', $token)) {
+                $month = $token;
+                continue;
+            }
+            if (strpos($token, '@') === 0) {
+                $targetUsername = substr($token, 1);
+                $targetUserId = null;
+            }
+        }
+
+        $stats = $this->stats->getMonthlyStats($chatId, $month);
+        if (empty($stats['mods'])) {
+            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /mod add (reply) to add one.');
+            return;
+        }
+
+        $target = null;
+        foreach ($stats['mods'] as $mod) {
+            if ($targetUserId !== null && (int)$mod['user_id'] === (int)$targetUserId) {
+                $target = $mod;
+                break;
+            }
+            if ($targetUsername !== null && $mod['username'] && strtolower($mod['username']) === strtolower($targetUsername)) {
+                $target = $mod;
+                break;
+            }
+        }
+
+        if (!$target) {
+            $this->tg->sendMessage($responseChatId, 'Mod not found in this chat.');
+            return;
+        }
+
+        $text = $this->formatStatsMessage($target, $stats['range']);
+        $this->tg->sendMessage($responseChatId, $text);
+    }
+
+    private function handleLeaderboard(int|string $responseChatId, int|string $chatId, string $args): void
+    {
+        $month = null;
+        $budget = null;
+
+        $tokens = preg_split('/\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^\d{4}-\d{2}$/', $token)) {
+                $month = $token;
+                continue;
+            }
+            if (is_numeric($token)) {
+                $budget = (float)$token;
+            }
+        }
+
+        $stats = $this->stats->getMonthlyStats($chatId, $month);
+        if (empty($stats['mods'])) {
+            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /mod add (reply) to add one.');
+            return;
+        }
+
+        if ($budget === null) {
+            $budget = (float)$stats['settings']['reward_budget'];
+        }
+
+        $ranked = $this->rewards->rankAndReward($stats['mods'], $budget);
+        $text = $this->formatLeaderboardMessage($ranked, $stats['range'], $budget);
+        $this->tg->sendMessage($responseChatId, $text);
+    }
+
+    private function handleReport(int|string $responseChatId, int|string $chatId, string $args): void
+    {
+        $month = null;
+        $budget = null;
+
+        $tokens = preg_split('/\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^\d{4}-\d{2}$/', $token)) {
+                $month = $token;
+                continue;
+            }
+            if (is_numeric($token)) {
+                $budget = (float)$token;
+            }
+        }
+
+        $stats = $this->stats->getMonthlyStats($chatId, $month);
+        if (empty($stats['mods'])) {
+            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /mod add (reply) to add one.');
+            return;
+        }
+
+        if ($budget === null) {
+            $budget = (float)$stats['settings']['reward_budget'];
+        }
+
+        $filePath = $this->rewardSheet->generate($chatId, $month, $budget);
+        $caption = 'Reward sheet for ' . $stats['range']['label'] . ' (budget: ' . number_format($budget, 2) . ')';
+        $this->tg->sendDocument($responseChatId, $filePath, $caption);
+    }
+
+    private function handleReportCsv(int|string $responseChatId, int|string $chatId, string $args): void
+    {
+        $month = null;
+        $budget = null;
+
+        $tokens = preg_split('/\\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^\\d{4}-\\d{2}$/', $token)) {
+                $month = $token;
+                continue;
+            }
+            if (is_numeric($token)) {
+                $budget = (float)$token;
+            }
+        }
+
+        $stats = $this->stats->getMonthlyStats($chatId, $month);
+        if (empty($stats['mods'])) {
+            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /mod add (reply) to add one.');
+            return;
+        }
+
+        if ($budget === null) {
+            $budget = (float)$stats['settings']['reward_budget'];
+        }
+
+        $filePath = $this->rewardCsv->generate($chatId, $month, $budget);
+        $caption = 'CSV reward sheet for ' . $stats['range']['label'] . ' (budget: ' . number_format($budget, 2) . ')';
+        $this->tg->sendDocument($responseChatId, $filePath, $caption);
+    }
+
+    private function handleExportGoogleSheet(int|string $responseChatId, int|string $chatId, string $args): void
+    {
+        $month = null;
+        $budget = null;
+
+        $tokens = preg_split('/\\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^\\d{4}-\\d{2}$/', $token)) {
+                $month = $token;
+                continue;
+            }
+            if (is_numeric($token)) {
+                $budget = (float)$token;
+            }
+        }
+
+        $stats = $this->stats->getMonthlyStats($chatId, $month);
+        if (empty($stats['mods'])) {
+            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /mod add (reply) to add one.');
+            return;
+        }
+
+        if ($budget === null) {
+            $budget = (float)$stats['settings']['reward_budget'];
+        }
+
+        $ranked = $this->rewards->rankAndReward($stats['mods'], $budget);
+        $rewardMap = [];
+        foreach ($ranked as $mod) {
+            $rewardMap[$mod['user_id']] = $mod['reward'];
+        }
+
+        $rows = [];
+        $rank = 1;
+        foreach ($stats['mods'] as $mod) {
+            $rows[] = [
+                'rank' => $rank,
+                'mod' => $mod['display_name'],
+                'score' => $mod['score'],
+                'messages' => $mod['messages'],
+                'warnings' => $mod['warnings'],
+                'mutes' => $mod['mutes'],
+                'bans' => $mod['bans'],
+                'active_hours' => round($mod['active_minutes'] / 60, 2),
+                'membership_hours' => round($mod['membership_minutes'] / 60, 2),
+                'days_active' => $mod['days_active'],
+                'improvement' => $mod['improvement'],
+                'reward' => $rewardMap[$mod['user_id']] ?? 0.0,
+            ];
+            $rank++;
+        }
+
+        $payload = [
+            'chat_id' => $chatId,
+            'month' => $stats['range']['month'],
+            'label' => $stats['range']['label'],
+            'budget' => $budget,
+            'summary' => $stats['summary'],
+            'rows' => $rows,
+        ];
+
+        $result = $this->googleSheets->export($payload);
+        if ($result['ok']) {
+            $this->tg->sendMessage($responseChatId, 'Exported to Google Sheets successfully.');
+        } else {
+            $this->tg->sendMessage($responseChatId, 'Google Sheets export failed: ' . ($result['error'] ?? 'unknown error'));
+        }
+    }
+
+    private function handleSetBudget(int|string $responseChatId, int|string $chatId, string $args): void
+    {
+        $value = trim($args);
+        if ($value === '' || !is_numeric($value)) {
+            $this->tg->sendMessage($responseChatId, 'Usage: /setbudget <amount> <chat_id>');
+            return;
+        }
+        $amount = (float)$value;
+        $this->settings->updateBudget($chatId, $amount);
+        $this->tg->sendMessage($responseChatId, 'Budget set to ' . number_format($amount, 2) . '.');
+    }
+
+    private function handleSetTimezone(int|string $responseChatId, int|string $chatId, string $args): void
+    {
+        $tz = trim($args);
+        if ($tz === '') {
+            $this->tg->sendMessage($responseChatId, 'Usage: /settimezone Region/City <chat_id>');
+            return;
+        }
+        try {
+            new DateTimeZone($tz);
+        } catch (\Exception $e) {
+            $this->tg->sendMessage($responseChatId, 'Invalid timezone. Example: Asia/Kolkata');
+            return;
+        }
+        $this->settings->updateTimezone($chatId, $tz);
+        $this->tg->sendMessage($responseChatId, 'Timezone updated to ' . $tz . '.');
+    }
+
+    private function handleSetActivity(int|string $responseChatId, int|string $chatId, string $args): void
+    {
+        $parts = preg_split('/\s+/', trim($args));
+        $gap = isset($parts[0]) ? (int)$parts[0] : 0;
+        $floor = isset($parts[1]) ? (int)$parts[1] : 0;
+        if ($gap <= 0 || $floor < 0) {
+            $this->tg->sendMessage($responseChatId, 'Usage: /setactivity <gap_minutes> <floor_minutes> <chat_id>');
+            return;
+        }
+        $this->settings->updateActivitySettings($chatId, $gap, $floor);
+        $this->tg->sendMessage($responseChatId, 'Activity settings updated.');
+    }
+
+    private function handleMyChats(int|string $responseChatId, int|string $userId): void
+    {
+        $chats = $this->getUserChats($userId, 20);
+        if (empty($chats)) {
+            $this->tg->sendMessage($responseChatId, 'No group chats found yet. Add me to a group and send a message there.');
+            return;
+        }
+
+        $lines = ['Your chats (use the ID with commands):'];
+        foreach ($chats as $chat) {
+            $title = $chat['title'] ?: 'Untitled';
+            $mod = !empty($chat['is_mod']) ? ' (mod)' : '';
+            $lines[] = $chat['id'] . ' | ' . $this->escape($title) . $mod;
+        }
+
+        $this->tg->sendMessage($responseChatId, implode("\n", $lines));
+    }
+
+    private function resolveTargetChatId(int|string $userId, int|string $responseChatId, string $args): array
+    {
+        $tokens = preg_split('/\s+/', trim($args));
+        $chatId = null;
+        $rest = [];
+
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^(?:chat|chatid|group|id):(-?\d+)$/i', $token, $match)) {
+                if ($chatId === null) {
+                    $chatId = (int)$match[1];
+                    continue;
+                }
+            }
+            if ($chatId === null && preg_match('/^-?\d{6,}$/', $token)) {
+                $chatId = (int)$token;
+                continue;
+            }
+            $rest[] = $token;
+        }
+
+        $cleanArgs = trim(implode(' ', $rest));
+        if ($chatId !== null) {
+            return [$chatId, $cleanArgs];
+        }
+
+        $chats = $this->getUserChats($userId, 10);
+        if (count($chats) === 1) {
+            return [(int)$chats[0]['id'], $cleanArgs];
+        }
+
+        if (empty($chats)) {
+            $this->tg->sendMessage($responseChatId, 'No group chats found yet. Add me to a group and send a message there.');
+            return [null, $cleanArgs];
+        }
+
+        $lines = [
+            'Please include a chat id. Example: /stats -1001234567890',
+            'Your chats:',
+        ];
+        foreach ($chats as $chat) {
+            $title = $chat['title'] ?: 'Untitled';
+            $mod = !empty($chat['is_mod']) ? ' (mod)' : '';
+            $lines[] = $chat['id'] . ' | ' . $this->escape($title) . $mod;
+        }
+        $this->tg->sendMessage($responseChatId, implode("\n", $lines));
+        return [null, $cleanArgs];
+    }
+
+    private function getUserChats(int|string $userId, int $limit): array
+    {
+        $limit = max(1, min(50, (int)$limit));
+        $sql = 'SELECT c.id, c.title, c.type, cm.is_mod, cm.updated_at
+                FROM chat_members cm
+                JOIN chats c ON c.id = cm.chat_id
+                WHERE cm.user_id = ? AND c.type IN (\'group\', \'supergroup\')
+                ORDER BY cm.updated_at DESC
+                LIMIT ' . $limit;
+
+        return $this->db->fetchAll($sql, [$userId]);
+    }
+
+    private function handleModCommand(int|string $chatId, array $message, string $args): void
+    {
+        if (!isset($message['reply_to_message']['from'])) {
+            $this->tg->sendMessage($chatId, 'Reply to a user with /mod add or /mod remove.');
+            return;
+        }
+
+        $target = $message['reply_to_message']['from'];
+        $this->upsertUser($target);
+        $this->ensureChatMember($chatId, $target['id']);
+
+        $action = strtolower(trim($args));
+        if ($action === 'add') {
+            $this->setModStatus($chatId, $target['id'], true);
+            $this->tg->sendMessage($chatId, 'Mod added: ' . $this->displayName($target));
+            return;
+        }
+
+        if ($action === 'remove') {
+            $this->setModStatus($chatId, $target['id'], false);
+            $this->tg->sendMessage($chatId, 'Mod removed: ' . $this->displayName($target));
+            return;
+        }
+
+        $this->tg->sendMessage($chatId, 'Usage: /mod add or /mod remove (reply to a user).');
+    }
+
+    private function handleAutoReport(int|string $responseChatId, int|string $chatId, string $args): void
+    {
+        $parts = preg_split('/\\s+/', trim($args));
+        $action = strtolower($parts[0] ?? '');
+
+        if ($action === 'status' || $action === '') {
+            $settings = $this->settings->get($chatId);
+            $status = !empty($settings['auto_report_enabled']) ? 'ON' : 'OFF';
+            $day = $settings['auto_report_day'] ?? 1;
+            $hour = $settings['auto_report_hour'] ?? 9;
+            $this->tg->sendMessage($responseChatId, 'Auto report: ' . $status . ' | Day ' . $day . ' at ' . $hour . ':00.');
+            return;
+        }
+
+        if ($action === 'on') {
+            $day = isset($parts[1]) ? (int)$parts[1] : null;
+            $hour = isset($parts[2]) ? (int)$parts[2] : null;
+            if ($day !== null && ($day < 1 || $day > 28)) {
+                $this->tg->sendMessage($responseChatId, 'Day must be between 1 and 28.');
+                return;
+            }
+            if ($hour !== null && ($hour < 0 || $hour > 23)) {
+                $this->tg->sendMessage($responseChatId, 'Hour must be between 0 and 23.');
+                return;
+            }
+            $this->settings->updateAutoReport($chatId, true, $day, $hour);
+            $this->tg->sendMessage($responseChatId, 'Auto report enabled.');
+            return;
+        }
+
+        if ($action === 'off') {
+            $this->settings->updateAutoReport($chatId, false, null, null);
+            $this->tg->sendMessage($responseChatId, 'Auto report disabled.');
+            return;
+        }
+
+        $this->tg->sendMessage($responseChatId, 'Usage: /autoreport on [day] [hour] | /autoreport off | /autoreport status');
+    }
+
+    private function handleModerationCommand(int|string $chatId, array $message, string $command, string $args): void
+    {
+        if (!isset($message['reply_to_message']['from'])) {
+            $this->tg->sendMessage($chatId, 'Reply to a user to perform moderation.');
+            return;
+        }
+
+        $actor = $message['from'];
+        $target = $message['reply_to_message']['from'];
+        $this->upsertUser($target);
+        $this->ensureChatMember($chatId, $actor['id']);
+        $this->setModStatus($chatId, $actor['id'], true);
+
+        $reason = trim($args);
+        $durationMinutes = null;
+
+        if ($command === 'mute') {
+            $parts = preg_split('/\s+/', trim($args));
+            if (!empty($parts[0]) && is_numeric($parts[0])) {
+                $durationMinutes = (int)$parts[0];
+                array_shift($parts);
+                $reason = trim(implode(' ', $parts));
+            } else {
+                $durationMinutes = 60;
+            }
+        }
+
+        if ($command === 'warn') {
+            $this->recordAction($chatId, $actor['id'], $target['id'], 'warn', $reason, null);
+            $this->tg->sendMessage($chatId, 'Warned ' . $this->displayName($target) . ($reason ? ': ' . $reason : '.'));
+            return;
+        }
+
+        if ($command === 'mute') {
+            $until = time() + ($durationMinutes * 60);
+            $this->tg->restrictChatMember($chatId, $target['id'], $until);
+            $this->recordAction($chatId, $actor['id'], $target['id'], 'mute', $reason, $durationMinutes);
+            $this->tg->sendMessage($chatId, 'Muted ' . $this->displayName($target) . ' for ' . $durationMinutes . ' minutes.' . ($reason ? ' ' . $reason : ''));
+            return;
+        }
+
+        if ($command === 'ban') {
+            $this->tg->banChatMember($chatId, $target['id']);
+            $this->recordAction($chatId, $actor['id'], $target['id'], 'ban', $reason, null);
+            $this->tg->sendMessage($chatId, 'Banned ' . $this->displayName($target) . ($reason ? ': ' . $reason : '.'));
+            return;
+        }
+
+        if ($command === 'unmute') {
+            $this->tg->unrestrictChatMember($chatId, $target['id']);
+            $this->recordAction($chatId, $actor['id'], $target['id'], 'unmute', $reason, null);
+            $this->tg->sendMessage($chatId, 'Unmuted ' . $this->displayName($target) . '.');
+            return;
+        }
+
+        if ($command === 'unban') {
+            $this->tg->unbanChatMember($chatId, $target['id']);
+            $this->recordAction($chatId, $actor['id'], $target['id'], 'unban', $reason, null);
+            $this->tg->sendMessage($chatId, 'Unbanned ' . $this->displayName($target) . '.');
+        }
+    }
+
+    private function isAuthorized(int|string $chatId, int|string $userId): bool
+    {
+        $isMod = $this->isMod($chatId, $userId);
+        if (!$this->config['use_telegram_admins']) {
+            return $isMod;
+        }
+
+        $resp = $this->tg->getChatMember($chatId, $userId);
+        if (!($resp['ok'] ?? false)) {
+            return $isMod;
+        }
+
+        $status = $resp['result']['status'] ?? '';
+        if (in_array($status, ['administrator', 'creator'], true)) {
+            return true;
+        }
+
+        return $isMod;
+    }
+
+    private function isMod(int|string $chatId, int|string $userId): bool
+    {
+        $row = $this->db->fetch('SELECT is_mod FROM chat_members WHERE chat_id = ? AND user_id = ?', [$chatId, $userId]);
+        return $row ? (bool)$row['is_mod'] : false;
+    }
+
+    private function setModStatus(int|string $chatId, int|string $userId, bool $isMod): void
+    {
+        $this->db->exec(
+            'UPDATE chat_members SET is_mod = ?, updated_at = ? WHERE chat_id = ? AND user_id = ?',
+            [$isMod ? 1 : 0, $this->nowUtc(), $chatId, $userId]
+        );
+    }
+
+    private function recordMessage(int|string $chatId, array $message): void
+    {
+        if (!isset($message['from'])) {
+            return;
+        }
+        $userId = $message['from']['id'];
+        $messageId = $message['message_id'] ?? null;
+        if ($messageId === null) {
+            return;
+        }
+        $sentAt = gmdate('Y-m-d H:i:s', $message['date']);
+
+        $this->db->exec(
+            'INSERT IGNORE INTO messages (chat_id, user_id, message_id, sent_at)
+             VALUES (?, ?, ?, ?)',
+            [$chatId, $userId, $messageId, $sentAt]
+        );
+    }
+
+    private function recordAction(int|string $chatId, int|string $modId, int|string $targetId, string $type, ?string $reason, ?int $durationMinutes): void
+    {
+        $this->db->exec(
+            'INSERT INTO actions (chat_id, mod_id, target_user_id, action_type, reason, duration_minutes, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [$chatId, $modId, $targetId, $type, $reason ?: null, $durationMinutes, $this->nowUtc()]
+        );
+    }
+
+    private function recordMembershipJoin(int|string $chatId, int|string $userId, int $timestamp): void
+    {
+        $joinedAt = gmdate('Y-m-d H:i:s', $timestamp);
+        $this->db->exec(
+            'INSERT INTO memberships (chat_id, user_id, joined_at, left_at)
+             VALUES (?, ?, ?, NULL)',
+            [$chatId, $userId, $joinedAt]
+        );
+    }
+
+    private function recordMembershipLeave(int|string $chatId, int|string $userId, int $timestamp): void
+    {
+        $leftAt = gmdate('Y-m-d H:i:s', $timestamp);
+        $existing = $this->db->fetch(
+            'SELECT id FROM memberships WHERE chat_id = ? AND user_id = ? AND left_at IS NULL ORDER BY joined_at DESC LIMIT 1',
+            [$chatId, $userId]
+        );
+
+        if ($existing) {
+            $this->db->exec('UPDATE memberships SET left_at = ? WHERE id = ?', [$leftAt, $existing['id']]);
+            return;
+        }
+
+        $this->db->exec(
+            'INSERT INTO memberships (chat_id, user_id, joined_at, left_at)
+             VALUES (?, ?, ?, ?)',
+            [$chatId, $userId, $leftAt, $leftAt]
+        );
+    }
+
+    private function upsertUser(array $user): void
+    {
+        $this->db->exec(
+            'INSERT INTO users (id, username, first_name, last_name, is_bot, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE username = VALUES(username), first_name = VALUES(first_name), last_name = VALUES(last_name), is_bot = VALUES(is_bot), updated_at = VALUES(updated_at)',
+            [
+                $user['id'],
+                $user['username'] ?? null,
+                $user['first_name'] ?? null,
+                $user['last_name'] ?? null,
+                !empty($user['is_bot']) ? 1 : 0,
+                $this->nowUtc(),
+                $this->nowUtc(),
+            ]
+        );
+    }
+
+    private function upsertChat(array $chat): void
+    {
+        $this->db->exec(
+            'INSERT INTO chats (id, title, type, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE title = VALUES(title), type = VALUES(type), updated_at = VALUES(updated_at)',
+            [
+                $chat['id'],
+                $chat['title'] ?? ($chat['username'] ?? null),
+                $chat['type'] ?? 'unknown',
+                $this->nowUtc(),
+                $this->nowUtc(),
+            ]
+        );
+    }
+
+    private function ensureChatMember(int|string $chatId, int|string $userId): void
+    {
+        $this->db->exec(
+            'INSERT INTO chat_members (chat_id, user_id, is_mod, created_at, updated_at)
+             VALUES (?, ?, 0, ?, ?)
+             ON DUPLICATE KEY UPDATE updated_at = VALUES(updated_at)',
+            [$chatId, $userId, $this->nowUtc(), $this->nowUtc()]
+        );
+    }
+
+    private function isRegularMessage(array $message): bool
+    {
+        if (isset($message['new_chat_members']) || isset($message['left_chat_member'])) {
+            return false;
+        }
+
+        $types = [
+            'text', 'photo', 'video', 'document', 'audio', 'voice', 'sticker',
+            'animation', 'video_note', 'contact', 'location', 'venue', 'poll'
+        ];
+
+        foreach ($types as $type) {
+            if (isset($message[$type])) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function parseCommand(string $text): ?array
+    {
+        $text = trim($text);
+        if ($text === '' || $text[0] !== '/') {
+            return null;
+        }
+
+        $parts = preg_split('/\s+/', $text, 2);
+        $commandPart = $parts[0];
+        $args = $parts[1] ?? '';
+
+        $commandPart = ltrim($commandPart, '/');
+        $commandBits = explode('@', $commandPart, 2);
+        $command = strtolower($commandBits[0]);
+        $botMention = $commandBits[1] ?? null;
+
+        $botUsername = $this->config['bot_username'] ?? null;
+        if ($botMention && $botUsername && strcasecmp($botMention, $botUsername) !== 0) {
+            return null;
+        }
+
+        return [
+            'command' => $command,
+            'args' => $args,
+        ];
+    }
+
+    private function helpText(bool $private): string
+    {
+        if ($private) {
+            return implode("\n", [
+                '<b>SP NET MOD TOOL</b>',
+                'Use these in private chat (include a chat id).',
+                '/mychats - list your group chats',
+                '/stats <chat_id> [YYYY-MM] [@user]',
+                '/leaderboard <chat_id> [YYYY-MM] [budget]',
+                '/report <chat_id> [YYYY-MM] [budget]',
+                '/reportcsv <chat_id> [YYYY-MM] [budget]',
+                '/exportgsheet <chat_id> [YYYY-MM] [budget]',
+                '/setbudget <amount> <chat_id>',
+                '/settimezone <Region/City> <chat_id>',
+                '/setactivity <gap_minutes> <floor_minutes> <chat_id>',
+                '/autoreport on [day] [hour] <chat_id>',
+            ]);
+        }
+
+        return implode("\n", [
+            '<b>SP NET MOD TOOL</b>',
+            'Moderation commands (group only):',
+            '/warn <reason> (reply)',
+            '/mute <minutes> <reason> (reply)',
+            '/ban <reason> (reply)',
+            '/unmute (reply)',
+            '/unban (reply)',
+            '/mod add|remove (reply)',
+            'Analytics commands are available in private chat with me.',
+        ]);
+    }
+
+    private function formatStatsMessage(array $stat, array $range): string
+    {
+        $name = $stat['display_name'];
+        $lines = [];
+        $lines[] = '<b>Stats for ' . $this->escape($name) . '</b>';
+        $lines[] = 'Month: ' . $range['label'];
+        $lines[] = 'Score: ' . number_format($stat['score'], 2);
+        $lines[] = 'Messages: ' . $stat['messages'];
+        $lines[] = 'Warnings issued: ' . $stat['warnings'];
+        $lines[] = 'Mutes issued: ' . $stat['mutes'];
+        $lines[] = 'Bans issued: ' . $stat['bans'];
+        $lines[] = 'Active minutes: ' . number_format($stat['active_minutes'], 1);
+        $lines[] = 'Membership minutes: ' . number_format($stat['membership_minutes'], 1);
+        $lines[] = 'Days active: ' . $stat['days_active'];
+        $lines[] = 'Peak hour: ' . $stat['peak_hour'];
+        if ($stat['improvement'] !== null) {
+            $lines[] = 'Improvement vs last month: ' . number_format($stat['improvement'], 1) . '%';
+        }
+        return implode("\n", $lines);
+    }
+
+    private function formatLeaderboardMessage(array $ranked, array $range, float $budget): string
+    {
+        $lines = [];
+        $lines[] = '<b>Leaderboard - ' . $range['label'] . '</b>';
+        $lines[] = 'Budget: ' . number_format($budget, 2);
+        $lines[] = '';
+
+        $rank = 1;
+        foreach ($ranked as $mod) {
+            $lines[] = $rank . '. ' . $this->escape($mod['display_name']) .
+                ' | Score ' . number_format($mod['score'], 2) .
+                ' | Reward ' . number_format($mod['reward'], 2);
+            $rank++;
+        }
+
+        return implode("\n", $lines);
+    }
+
+    private function displayName(array $user): string
+    {
+        if (!empty($user['username'])) {
+            return '@' . $user['username'];
+        }
+        $name = trim(($user['first_name'] ?? '') . ' ' . ($user['last_name'] ?? ''));
+        return $name !== '' ? $name : 'User ' . $user['id'];
+    }
+
+    private function escape(string $value): string
+    {
+        return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
+    }
+
+    private function nowUtc(): string
+    {
+        return gmdate('Y-m-d H:i:s');
+    }
+}

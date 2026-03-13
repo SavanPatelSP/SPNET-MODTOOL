@@ -1,0 +1,5 @@
+config.local.php
+storage/offset.txt
+storage/logs/
+storage/reports/
+.DS_Store
