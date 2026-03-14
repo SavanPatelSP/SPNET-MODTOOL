@@ -81,6 +81,7 @@ $title = $config['report']['brand_name'] ?? 'SP NET MOD TOOL';
 $displayAmount = number_format($amount, 2) . ' ' . htmlspecialchars($currency, ENT_QUOTES, 'UTF-8');
 $expiresAt = $expiryTs ? gmdate('Y-m-d H:i:s', $expiryTs) : '';
 $receiptId = strtoupper(substr(hash('sha1', $orderId . $address), 0, 10));
+$receiptUrl = 'crypto-receipt.php?token=' . urlencode((string)$token) . '&order=' . urlencode((string)$orderId) . '&download=1';
 
 ?><!DOCTYPE html>
 <html lang="en">
@@ -346,6 +347,9 @@ body {
                         </div>
                     </div>
                     <div class="divider"></div>
+                    <div class="actions">
+                        <a class="btn primary" href="<?php echo htmlspecialchars($receiptUrl, ENT_QUOTES, 'UTF-8'); ?>">Download Receipt</a>
+                    </div>
                 <?php endif; ?>
                 <div class="grid">
                     <div>
