@@ -23,7 +23,7 @@ if (!file_exists($file)) {
 $db = new Database($config['db']);
 $token = $config['bot_token'] ?? null;
 if ($token && $token !== 'YOUR_TELEGRAM_BOT_TOKEN') {
-    $tg = new Telegram($token);
+    $tg = new Telegram($token, $config['telegram'] ?? []);
     Logger::initChannel($tg, $config);
 }
 

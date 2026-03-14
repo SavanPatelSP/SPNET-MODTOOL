@@ -100,6 +100,14 @@ return [
         'allowed_updates' => ['message', 'chat_member'],
     ],
 
+    // Telegram network options (optional)
+    'telegram' => [
+        // Example: '1.1.1.1,8.8.8.8' if DNS resolution fails
+        'dns_servers' => null,
+        // 'v4' or 'v6' if needed
+        'ip_resolve' => null,
+    ],
+
     // Auto report defaults (used when chat settings are first created)
     'auto_report_defaults' => [
         'enabled' => false,

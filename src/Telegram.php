@@ -6,11 +6,13 @@ class Telegram
 {
     private string $token;
     private string $apiUrl;
+    private array $options;
 
-    public function __construct(string $token)
+    public function __construct(string $token, array $options = [])
     {
         $this->token = $token;
         $this->apiUrl = 'https://api.telegram.org/bot' . $token . '/';
+        $this->options = $options;
     }
 
     public function call(string $method, array $params = [], bool $isMultipart = false): array
@@ -24,6 +26,17 @@ class Telegram
             curl_setopt($ch, CURLOPT_CAINFO, $caPath);
         }
 
+        $dnsServers = $this->options['dns_servers'] ?? null;
+        if (is_string($dnsServers) && trim($dnsServers) !== '') {
+            curl_setopt($ch, CURLOPT_DNS_SERVERS, $dnsServers);
+        }
+        $ipResolve = strtolower((string)($this->options['ip_resolve'] ?? ''));
+        if ($ipResolve === 'v4') {
+            curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+        } elseif ($ipResolve === 'v6') {
+            curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V6);
+        }
+
         if ($isMultipart) {
             curl_setopt($ch, CURLOPT_POSTFIELDS, $params);
         } else {
@@ -34,11 +47,9 @@ class Telegram
         $result = curl_exec($ch);
         if ($result === false) {
             Logger::error('Telegram API call failed: ' . curl_error($ch));
-            curl_close($ch);
             return ['ok' => false, 'description' => 'curl_error'];
         }
 
-        curl_close($ch);
         $decoded = json_decode($result, true);
         if (!is_array($decoded)) {
             Logger::error('Telegram API invalid JSON response');

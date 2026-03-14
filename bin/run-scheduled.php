@@ -23,7 +23,7 @@ if (!$token || $token === 'YOUR_TELEGRAM_BOT_TOKEN') {
 }
 
 $db = new Database($config['db']);
-$tg = new Telegram($token);
+$tg = new Telegram($token, $config['telegram'] ?? []);
 Logger::initChannel($tg, $config);
 $changelog = new ChangelogService();
 $changelog->sendIfUpdated($tg, $config, 'scheduler');

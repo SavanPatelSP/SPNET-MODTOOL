@@ -71,7 +71,11 @@ class Logger
             $text = substr($text, 0, self::$maxLength - 3) . '...';
         }
 
-        self::$tg->sendMessage(self::$channelId, $text, [
+        $safeText = function_exists('htmlspecialchars')
+            ? htmlspecialchars($text, ENT_QUOTES, 'UTF-8')
+            : $text;
+
+        self::$tg->sendMessage(self::$channelId, $safeText, [
             'parse_mode' => 'HTML',
             'disable_web_page_preview' => true,
         ]);

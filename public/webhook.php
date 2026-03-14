@@ -22,7 +22,7 @@ if (!$update) {
 }
 
 $db = new Database($config['db']);
-$tg = new Telegram($token);
+$tg = new Telegram($token, $config['telegram'] ?? []);
 $handler = new UpdateHandler($db, $tg, $config);
 $handler->handleUpdate($update);
 
