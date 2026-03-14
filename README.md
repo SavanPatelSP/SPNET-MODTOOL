@@ -105,6 +105,142 @@ Group chat commands:
 - Moderation commands are disabled.
 - `/mod remove` (reply)
 
+## In-Depth Usage Guide (with examples)
+This section walks through the full workflow from setup to monthly rewards.
+
+### 1) Add the bot to your groups
+1. Add the bot to each Telegram group you want tracked.
+2. Make the bot an admin or disable privacy mode in BotFather so it can read all messages.
+3. Send any message in the group so the bot can discover the chat.
+4. In private chat with the bot, run:
+```text
+/mychats
+```
+5. Set a default chat:
+```text
+/usechat -1001234567890
+```
+
+### 2) Add and manage mods
+Use `/modadd` and `/modremove` in private chat.
+```text
+/modadd @alex
+/modadd 123456789
+/modremove @alex
+/modlist
+```
+Tip: You can forward a user message to the bot in private chat and reply with `/modadd` to avoid searching for IDs.
+
+### 3) Check stats and leaderboards
+```text
+/stats
+/stats 2026-02
+/stats @alex
+/leaderboard
+/leaderboard 2026-02
+```
+If you do not set `/usechat`, include the chat id first:
+```text
+/stats -1001234567890 2026-02 @alex
+```
+
+### 4) Generate reward sheets
+Budget is optional. If provided, the bot splits it across eligible mods based on score.
+```text
+/report 2026-02 5000
+/reportcsv 2026-02 5000
+```
+If you do not pass a budget, it will still rank mods and output reward suggestions using config defaults.
+
+### 5) Mid-month progress check
+```text
+/progress
+/progress 7500
+```
+
+### 6) Multi-chat summary (combined view)
+```text
+/summary 2026-02 12000
+```
+
+### 7) Coaching, health, trends (premium)
+```text
+/coach 2026-02
+/health 2026-02
+/trend 2026-02 5000
+/execsummary 2026-02 5000
+```
+
+### 8) Budget and scoring controls
+```text
+/setbudget 8000
+/settimezone Asia/Kolkata
+/setactivity 5 1
+```
+
+### 9) Automation (auto reports + progress checks)
+Enable monthly reports and mid-month progress:
+```text
+/autoreport on 1 9
+/autoprogress on 15 12
+```
+The scheduler must run hourly:
+```text
+php /Users/savanpatel/Documents/SPNET-MODTOOL/bin/run-scheduled.php
+```
+
+### 10) Dashboard (live stats)
+1. Start the local server:
+```bash
+php -S 127.0.0.1:8000 -t /Users/savanpatel/Documents/SPNET-MODTOOL/public
+```
+2. Open in browser:
+```text
+http://127.0.0.1:8000/dashboard.php?token=YOUR_TOKEN
+```
+3. Optional query params:
+```text
+http://127.0.0.1:8000/dashboard.php?token=YOUR_TOKEN&chat_id=-1001234567890&month=2026-02
+```
+
+### 11) Import historical data (ChatKeeper/Combot)
+CLI import examples:
+```bash
+php /Users/savanpatel/Documents/SPNET-MODTOOL/bin/import-chatkeeper.php --file=/path/analysis_users.csv --chat=-1001234567890 --month=2026-02
+php /Users/savanpatel/Documents/SPNET-MODTOOL/bin/import-combot.php --file=/path/combot.csv --chat=-1001234567890 --month=2026-02
+```
+Use `--replace` to overwrite an existing import for the same month.
+Premium users can also upload from the browser:
+```text
+http://127.0.0.1:8000/import.php?token=YOUR_TOKEN
+```
+
+### 12) Roster management
+```text
+/rosteradd @alex Moderator Night shift lead
+/rosterrole @alex Senior Moderator Handles appeals
+/rosterlist
+```
+
+### 13) Premium plans
+```text
+/plan
+/premium
+/pricing
+/setplan premium 30
+```
+
+### 14) Export to Google Sheets
+```text
+/exportgsheet 2026-02 5000
+```
+
+### 15) Troubleshooting
+- Bot not responding: check DNS/network on the host, then run `curl -I https://api.telegram.org`.
+- "No permission": ensure you are an admin in that group or add your user id to `owner_user_ids` in `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php`.
+- "No mods are added": run `/modadd` first.
+- "No group chats found": add the bot to a group and send any message there, then run `/mychats`.
+
 ## Notes
 - Moderation commands are disabled; the bot is analytics-only.
 - “Active time” is estimated from message gaps (configurable).
