@@ -6,6 +6,7 @@ use App\Database;
 use App\Telegram;
 use App\UpdateHandler;
 use App\Logger;
+use App\Services\ChangelogService;
 
 $token = $config['bot_token'] ?? null;
 if (!$token || $token === 'YOUR_TELEGRAM_BOT_TOKEN') {
@@ -15,6 +16,10 @@ if (!$token || $token === 'YOUR_TELEGRAM_BOT_TOKEN') {
 
 $db = new Database($config['db']);
 $tg = new Telegram($token);
+$loggerConfig = $config['logging'] ?? [];
+Logger::initChannel($tg, $config);
+$changelog = new ChangelogService();
+$changelog->sendIfUpdated($tg, $config, 'poller');
 $handler = new UpdateHandler($db, $tg, $config);
 
 $polling = $config['polling'] ?? [];

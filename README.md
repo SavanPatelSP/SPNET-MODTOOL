@@ -150,6 +150,12 @@ Adjust `polling` in `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php`
 - Filters: `search`, `min_messages`, `min_actions`, `min_active_hours`, `min_score`, `only_eligible`, `only_improving`, `limit`, `compact`, `show_sources`, `refresh`
 - Premium: PDF export, executive summary, trend report, and import wizard
 
+## Log Channel
+Send bot logs + changelog updates to a Telegram channel.
+1. Create a channel and add the bot as admin.
+2. Set `logging.channel_id` in `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` (format: `-1001234567890`).
+3. Optional: set `logging.log_updates = true` to log every message update (very noisy).
+
 ## Google Sheets Export (optional)
 This uses a webhook URL from Google Apps Script. Set `google_sheets.webhook_url` in `config.local.php`.
 

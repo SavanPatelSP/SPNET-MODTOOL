@@ -5,6 +5,8 @@ $config = require __DIR__ . '/../src/bootstrap.php';
 use App\Database;
 use App\Services\ExternalImportService;
 use App\Services\SubscriptionService;
+use App\Telegram;
+use App\Logger;
 
 $dashboardConfig = $config['dashboard'] ?? [];
 $token = $dashboardConfig['token'] ?? null;
@@ -23,6 +25,11 @@ if (!$token) {
 }
 
 $db = new Database($config['db']);
+$token = $config['bot_token'] ?? null;
+if ($token && $token !== 'YOUR_TELEGRAM_BOT_TOKEN') {
+    $tg = new Telegram($token);
+    Logger::initChannel($tg, $config);
+}
 $subscriptions = new SubscriptionService($db, $config);
 $importer = new ExternalImportService($db, $config);
 
@@ -54,6 +61,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $result = $importer->importCombot($tmp, $chatId, $month, $replace);
         } else {
             $result = $importer->importChatkeeper($tmp, $chatId, $month, $replace);
+        }
+
+        if ($result['ok'] ?? false) {
+            $logging = $config['logging'] ?? [];
+            if (!empty($logging['log_imports'])) {
+                Logger::info('Import wizard: ' . ($result['source'] ?? 'source') . ' chat ' . $chatId . ' month ' . ($result['month'] ?? '') . ' rows ' . ($result['imported'] ?? 0));
+            }
+        } else {
+            Logger::error('Import wizard failed for chat ' . $chatId . ': ' . ($result['error'] ?? 'unknown'));
         }
     }
 }

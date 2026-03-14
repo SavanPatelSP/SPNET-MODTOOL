@@ -2,8 +2,33 @@
 
 namespace App;
 
+use App\Telegram;
+
 class Logger
 {
+    private static ?Telegram $tg = null;
+    private static ?string $channelId = null;
+    private static string $minLevel = 'info';
+    private static int $maxLength = 3500;
+    private static bool $channelEnabled = false;
+    private static bool $sending = false;
+
+    public static function initChannel(?Telegram $tg, array $config): void
+    {
+        $logging = $config['logging'] ?? [];
+        $channelId = $logging['channel_id'] ?? null;
+        if (!$tg || !$channelId) {
+            self::$channelEnabled = false;
+            return;
+        }
+
+        self::$tg = $tg;
+        self::$channelId = (string)$channelId;
+        self::$minLevel = strtolower((string)($logging['min_level'] ?? 'info'));
+        self::$maxLength = max(500, (int)($logging['max_length'] ?? 3500));
+        self::$channelEnabled = true;
+    }
+
     public static function info(string $message): void
     {
         self::write('INFO', $message);
@@ -20,5 +45,46 @@ class Logger
         $date = gmdate('Y-m-d H:i:s');
         $line = '[' . $date . '] ' . $level . ' ' . $message . PHP_EOL;
         @file_put_contents($path, $line, FILE_APPEND);
+
+        self::sendToChannel($level, $message, $date);
+    }
+
+    private static function sendToChannel(string $level, string $message, string $date): void
+    {
+        if (!self::$channelEnabled || !self::$tg || !self::$channelId) {
+            return;
+        }
+        if (!self::levelAllowed($level)) {
+            return;
+        }
+        if (self::$sending) {
+            return;
+        }
+
+        self::$sending = true;
+        $text = '[' . $date . '] ' . $level . ' ' . $message;
+        if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+            if (mb_strlen($text) > self::$maxLength) {
+                $text = mb_substr($text, 0, self::$maxLength - 3) . '...';
+            }
+        } elseif (strlen($text) > self::$maxLength) {
+            $text = substr($text, 0, self::$maxLength - 3) . '...';
+        }
+
+        self::$tg->sendMessage(self::$channelId, $text, [
+            'parse_mode' => 'HTML',
+            'disable_web_page_preview' => true,
+        ]);
+        self::$sending = false;
+    }
+
+    private static function levelAllowed(string $level): bool
+    {
+        $level = strtoupper($level);
+        $min = strtoupper(self::$minLevel);
+        if ($min === 'ERROR') {
+            return $level === 'ERROR';
+        }
+        return true;
     }
 }

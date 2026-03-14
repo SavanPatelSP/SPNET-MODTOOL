@@ -128,6 +128,18 @@ return [
         'refresh_seconds' => 0,
     ],
 
+    // Log channel (optional)
+    'logging' => [
+        'channel_id' => null,        // Telegram channel id (e.g. -1001234567890)
+        'min_level' => 'info',       // info|error
+        'max_length' => 3500,
+        'log_commands' => true,
+        'log_reports' => true,
+        'log_imports' => true,
+        'log_changelog' => true,
+        'log_updates' => false,      // true = log every message update (very noisy)
+    ],
+
     // Google Sheets export (webhook-based; use Apps Script)
     'google_sheets' => [
         'webhook_url' => null,
