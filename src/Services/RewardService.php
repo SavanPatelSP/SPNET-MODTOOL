@@ -21,11 +21,17 @@ class RewardService
         $minDays = (int)($eligibility['min_days_active'] ?? 0);
         $minMessages = (int)($eligibility['min_messages'] ?? 0);
         $minScore = (float)($eligibility['min_score'] ?? 0);
+        $minActions = (int)($eligibility['min_actions'] ?? 0);
+        $minActiveHours = (float)($eligibility['min_active_hours'] ?? 0);
 
         $topN = $this->config['reward']['top_n'] ?? count($mods);
         $topN = min($topN, count($mods));
         $rankMultipliers = $this->config['reward']['rank_multipliers'] ?? [];
         $minReward = (float)($this->config['reward']['min_reward'] ?? 0);
+        $bonusPercent = (float)($this->config['reward']['kpi_bonus_percent'] ?? 0);
+        $bonusSplit = $this->config['reward']['kpi_bonus_split'] ?? [];
+        $bonusPool = $budget > 0 ? max(0.0, $budget * $bonusPercent) : 0.0;
+        $baseBudget = max(0.0, $budget - $bonusPool);
 
         $premium = (bool)($context['premium'] ?? false);
         $premiumReward = $this->config['premium']['reward'] ?? [];
@@ -45,6 +51,18 @@ class RewardService
             if ($minScore > 0 && ($mod['score'] ?? 0) < $minScore) {
                 $isEligible = false;
             }
+            if ($minActions > 0) {
+                $actions = (int)(($mod['warnings'] ?? 0) + ($mod['mutes'] ?? 0) + ($mod['bans'] ?? 0));
+                if ($actions < $minActions) {
+                    $isEligible = false;
+                }
+            }
+            if ($minActiveHours > 0) {
+                $hours = ((float)($mod['active_minutes'] ?? 0)) / 60;
+                if ($hours < $minActiveHours) {
+                    $isEligible = false;
+                }
+            }
             $mod['eligible'] = $isEligible;
             $eligible[] = $mod;
         }
@@ -58,6 +76,8 @@ class RewardService
                 }
             }
         }
+
+        $bonusMap = $this->buildBonusMap($eligible, $bonusPool, $bonusSplit);
 
         $adjustedScores = [];
         $total = 0.0;
@@ -78,11 +98,11 @@ class RewardService
         }
 
         $rewards = [];
-        $remainingBudget = $budget;
+        $remainingBudget = $baseBudget;
         foreach ($eligibleTop as $i => $mod) {
             $reward = 0.0;
             if ($total > 0) {
-                $reward = ($budget * $adjustedScores[$i]) / $total;
+                $reward = ($baseBudget * $adjustedScores[$i]) / $total;
                 $reward = max($minReward, $reward);
             }
             $reward = round($reward, 2);
@@ -97,8 +117,20 @@ class RewardService
 
         if ($premium) {
             $maxShare = (float)($context['max_share'] ?? ($premiumReward['max_share'] ?? 0));
-            if ($maxShare > 0 && $budget > 0) {
-                $rewards = $this->applyRewardCap($rewards, $budget, $maxShare);
+            if ($maxShare > 0 && $baseBudget > 0) {
+                $rewards = $this->applyRewardCap($rewards, $baseBudget, $maxShare);
+            }
+        }
+
+        if (!empty($bonusMap)) {
+            foreach ($rewards as $i => $mod) {
+                $bonus = (float)($bonusMap[$mod['user_id']] ?? 0);
+                if ($bonus > 0) {
+                    $rewards[$i]['bonus'] = round($bonus, 2);
+                    $rewards[$i]['reward'] += $bonus;
+                } else {
+                    $rewards[$i]['bonus'] = 0.0;
+                }
             }
         }
 
@@ -113,11 +145,72 @@ class RewardService
                 $final[] = $rewardedMap[$mod['user_id']];
             } else {
                 $mod['reward'] = 0.0;
+                $mod['bonus'] = 0.0;
                 $final[] = $mod;
             }
         }
 
         return $final;
+    }
+
+    private function buildBonusMap(array $mods, float $bonusPool, array $bonusSplit): array
+    {
+        if ($bonusPool <= 0) {
+            return [];
+        }
+        $splitTotal = 0.0;
+        foreach ($bonusSplit as $value) {
+            $splitTotal += (float)$value;
+        }
+        if ($splitTotal <= 0) {
+            return [];
+        }
+
+        $eligible = array_values(array_filter($mods, static function (array $mod): bool {
+            return !empty($mod['eligible']);
+        }));
+        if (empty($eligible)) {
+            return [];
+        }
+
+        $topMod = null;
+        $mostActive = null;
+        $mostImproved = null;
+        foreach ($eligible as $mod) {
+            if ($topMod === null || ($mod['score'] ?? 0) > ($topMod['score'] ?? 0)) {
+                $topMod = $mod;
+            }
+            if ($mostActive === null || ($mod['active_minutes'] ?? 0) > ($mostActive['active_minutes'] ?? 0)) {
+                $mostActive = $mod;
+            }
+            if (($mod['improvement'] ?? null) !== null) {
+                if ($mostImproved === null || ($mod['improvement'] ?? 0) > ($mostImproved['improvement'] ?? 0)) {
+                    $mostImproved = $mod;
+                }
+            }
+        }
+
+        $winners = [
+            'top_mod' => $topMod,
+            'most_active' => $mostActive,
+            'most_improved' => $mostImproved,
+        ];
+
+        $bonusMap = [];
+        foreach ($winners as $key => $winner) {
+            if (!$winner) {
+                continue;
+            }
+            $split = (float)($bonusSplit[$key] ?? 0);
+            if ($split <= 0) {
+                continue;
+            }
+            $amount = $bonusPool * ($split / $splitTotal);
+            $userId = (int)$winner['user_id'];
+            $bonusMap[$userId] = ($bonusMap[$userId] ?? 0) + $amount;
+        }
+
+        return $bonusMap;
     }
 
     private function applyRewardCap(array $rewards, float $budget, float $maxShare): array

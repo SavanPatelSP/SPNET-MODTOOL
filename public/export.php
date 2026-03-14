@@ -11,6 +11,7 @@ use App\Services\RewardHistoryService;
 use App\Services\ArchiveService;
 use App\Services\SubscriptionService;
 use App\Services\PdfService;
+use App\Services\ReportApprovalService;
 use App\Reports\RewardSheet;
 use App\Reports\RewardCsv;
 use App\Reports\MultiChatReport;
@@ -45,6 +46,7 @@ $rewardService = new RewardService($config);
 $rewardContext = new RewardContextService($db, $config);
 $rewardHistory = new RewardHistoryService($db);
 $archive = new ArchiveService($db);
+$approvals = new ReportApprovalService($db);
 $subscriptions = new SubscriptionService($db, $config);
 $pdfService = new PdfService();
 
@@ -104,7 +106,7 @@ if ($type === 'trend') {
     exit;
 }
 
-$report = new RewardSheet($statsService, $rewardService, $config, $rewardContext, $rewardHistory, $archive);
+$report = new RewardSheet($statsService, $rewardService, $config, $rewardContext, $rewardHistory, $archive, $approvals);
 $file = $report->generate($chatId, $month, $effectiveBudget);
 
 if ($type === 'pdf') {

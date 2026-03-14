@@ -7,6 +7,7 @@ use App\Services\RewardService;
 use App\Services\RewardContextService;
 use App\Services\RewardHistoryService;
 use App\Services\ArchiveService;
+use App\Services\ReportApprovalService;
 
 class RewardSheet
 {
@@ -16,8 +17,9 @@ class RewardSheet
     private ?RewardContextService $contextService;
     private ?RewardHistoryService $history;
     private ?ArchiveService $archive;
+    private ?ReportApprovalService $approvals;
 
-    public function __construct(StatsService $stats, RewardService $rewards, array $config, ?RewardContextService $contextService = null, ?RewardHistoryService $history = null, ?ArchiveService $archive = null)
+    public function __construct(StatsService $stats, RewardService $rewards, array $config, ?RewardContextService $contextService = null, ?RewardHistoryService $history = null, ?ArchiveService $archive = null, ?ReportApprovalService $approvals = null)
     {
         $this->stats = $stats;
         $this->rewards = $rewards;
@@ -25,6 +27,7 @@ class RewardSheet
         $this->contextService = $contextService;
         $this->history = $history;
         $this->archive = $archive;
+        $this->approvals = $approvals;
     }
 
     public function generate(int|string $chatId, ?string $month, float $budget, ?array $bundle = null, ?string $suffix = null): string
@@ -35,9 +38,11 @@ class RewardSheet
         $ranked = $this->rewards->rankAndReward($mods, $budget, $context);
 
         $rewardMap = [];
+        $bonusMap = [];
         $eligibilityMap = [];
         foreach ($ranked as $item) {
             $rewardMap[$item['user_id']] = $item['reward'];
+            $bonusMap[$item['user_id']] = $item['bonus'] ?? 0.0;
             if (array_key_exists('eligible', $item)) {
                 $eligibilityMap[$item['user_id']] = (bool)$item['eligible'];
             }
@@ -57,15 +62,24 @@ class RewardSheet
         $summary = $bundle['summary'];
         $label = $bundle['range']['label'];
 
+        $approvalRequired = !empty($bundle['settings']['approval_required']);
+        $approvalStatus = null;
+        if ($approvalRequired && $this->approvals) {
+            $approvalStatus = $this->approvals->getStatus($chatId, $bundle['range']['month'], 'reward');
+        }
+
         $html = $this->renderHtml([
             'brand' => $brand,
             'accent' => $accent,
             'secondary' => $secondary,
             'label' => $label,
             'budget' => $budget,
+            'approval_required' => $approvalRequired,
+            'approval_status' => $approvalStatus,
             'summary' => $summary,
             'mods' => $modsSorted,
             'reward_map' => $rewardMap,
+            'bonus_map' => $bonusMap,
             'eligibility_map' => $eligibilityMap,
             'top_score' => $topScore,
             'insights' => $insights,
@@ -181,27 +195,39 @@ class RewardSheet
             $trendClass = 'trend-flat';
             if ($mod['improvement'] !== null) {
                 if ($mod['improvement'] >= 0) {
-                    $trendLabel = 'Up ' . number_format($mod['improvement'], 1) . '%';
+                    $trendLabel = 'Up &uarr; ' . number_format($mod['improvement'], 1) . '%';
                     $trendClass = 'trend-up';
                 } else {
-                    $trendLabel = 'Down ' . number_format(abs($mod['improvement']), 1) . '%';
+                    $trendLabel = 'Down &darr; ' . number_format(abs($mod['improvement']), 1) . '%';
                     $trendClass = 'trend-down';
                 }
             }
+            $trend3mLabel = 'N/A';
+            if (($mod['trend_3m'] ?? null) !== null) {
+                $trend3mLabel = ($mod['trend_3m'] >= 0 ? '+' : '') . number_format($mod['trend_3m'], 1) . '%';
+            }
+            $impact = $mod['impact_score'] ?? 0;
+            $consistency = $mod['consistency_index'] ?? 0;
+            $roleLabel = $mod['role'] ?? '-';
+            $bonus = $data['bonus_map'][$mod['user_id']] ?? 0.0;
 
             $rows .= '<tr class="' . $rowClass . '">';
             $rows .= '<td>' . $rank . '</td>';
             $rows .= '<td>' . $this->escape($mod['display_name']) . '</td>';
+            $rows .= '<td>' . $this->escape($roleLabel) . '</td>';
             $rows .= '<td>' . number_format($mod['score'], 2) . '<div class="bar"><span style="width:' . number_format($scorePercent, 2) . '%"></span></div></td>';
-            $rows .= '<td>' . $mod['messages'] . '<div class="sub">Bot ' . (int)$internalMessages . ' | Ext ' . (int)$externalMessages . '</div></td>';
+            $rows .= '<td>' . number_format($impact, 2) . '</td>';
+            $rows .= '<td>' . number_format($consistency, 1) . '%</td>';
+            $rows .= '<td>' . $mod['messages'] . '<div class="sub">Bot ' . (int)$internalMessages . ' | External ' . (int)$externalMessages . '</div></td>';
             $rows .= '<td>' . $mod['warnings'] . '</td>';
             $rows .= '<td>' . $mod['mutes'] . '</td>';
             $rows .= '<td>' . $mod['bans'] . '</td>';
-            $rows .= '<td>' . number_format($mod['active_minutes'] / 60, 1) . 'h<div class="sub">Bot ' . number_format($internalActive / 60, 1) . 'h | Ext ' . number_format($externalActive / 60, 1) . 'h</div></td>';
+            $rows .= '<td>' . number_format($mod['active_minutes'] / 60, 1) . 'h<div class="sub">Bot ' . number_format($internalActive / 60, 1) . 'h | External ' . number_format($externalActive / 60, 1) . 'h</div></td>';
             $rows .= '<td>' . number_format($mod['membership_minutes'] / 60, 1) . 'h</td>';
             $rows .= '<td>' . $mod['days_active'] . '</td>';
-            $rows .= '<td><span class="trend ' . $trendClass . '">' . $trendLabel . '</span></td>';
+            $rows .= '<td><span class="trend ' . $trendClass . '">' . $trendLabel . '</span><div class="sub">3m ' . $trend3mLabel . '</div></td>';
             $rows .= '<td>' . ($eligible ? 'Eligible' : 'Below minimums') . '</td>';
+            $rows .= '<td>' . number_format($bonus, 2) . '</td>';
             $rows .= '<td>' . number_format($reward, 2) . '</td>';
             $rows .= '</tr>';
             $rank++;
@@ -219,6 +245,10 @@ class RewardSheet
         }
 
         $summary = $data['summary'];
+        $approvalRequired = !empty($data['approval_required']);
+        $approvalStatus = $data['approval_status']['status'] ?? 'pending';
+        $approvalLine = $approvalRequired ? ('Approval: ' . strtoupper($approvalStatus)) : '';
+        $draftStamp = ($approvalRequired && $approvalStatus !== 'approved') ? '<div class="stamp">DRAFT</div>' : '';
 
         return '<!DOCTYPE html>
 <html lang="en">
@@ -250,6 +280,18 @@ body {
     border-bottom: 1px solid #eef0f4;
     padding-bottom: 18px;
     margin-bottom: 24px;
+}
+.stamp {
+    position: absolute;
+    top: 18px;
+    right: 22px;
+    background: #ffe4e6;
+    color: #9f1239;
+    font-weight: 700;
+    letter-spacing: 2px;
+    padding: 6px 12px;
+    border-radius: 10px;
+    border: 2px solid #fda4af;
 }
 .header h1 {
     font-size: 28px;
@@ -373,6 +415,7 @@ body {
 </head>
 <body>
 <div class="container">
+    ' . $draftStamp . '
     <div class="header">
         <div>
             <h1>' . $this->escape($data['brand']) . '</h1>
@@ -380,6 +423,7 @@ body {
         </div>
         <div class="meta">
             <div>Budget: ' . number_format($data['budget'], 2) . '</div>
+            ' . ($approvalLine !== '' ? '<div>' . $approvalLine . '</div>' : '') . '
             <div>Generated: ' . $this->escape($data['generated_at']) . '</div>
         </div>
     </div>
@@ -392,12 +436,12 @@ body {
         <div class="card">
             <h3>Total Messages</h3>
             <div class="value">' . (int)$summary['messages'] . '</div>
-            <div class="sub">Bot ' . (int)($summary['internal_messages'] ?? 0) . ' | Ext ' . (int)($summary['external_messages'] ?? 0) . '</div>
+            <div class="sub">Bot ' . (int)($summary['internal_messages'] ?? 0) . ' | External ' . (int)($summary['external_messages'] ?? 0) . '</div>
         </div>
         <div class="card">
             <h3>Active Hours</h3>
             <div class="value">' . number_format($summary['active_minutes'] / 60, 1) . 'h</div>
-            <div class="sub">Bot ' . number_format(($summary['internal_active_minutes'] ?? 0) / 60, 1) . 'h | Ext ' . number_format(($summary['external_active_minutes'] ?? 0) / 60, 1) . 'h</div>
+            <div class="sub">Bot ' . number_format(($summary['internal_active_minutes'] ?? 0) / 60, 1) . 'h | External ' . number_format(($summary['external_active_minutes'] ?? 0) / 60, 1) . 'h</div>
         </div>
         <div class="card">
             <h3>Total Actions</h3>
@@ -407,6 +451,14 @@ body {
             <h3>Avg Score</h3>
             <div class="value">' . number_format($summary['avg_score'], 2) . '</div>
         </div>
+        <div class="card">
+            <h3>Avg Impact</h3>
+            <div class="value">' . number_format($summary['avg_impact'], 2) . '</div>
+        </div>
+        <div class="card">
+            <h3>Avg Consistency</h3>
+            <div class="value">' . number_format($summary['avg_consistency'], 1) . '%</div>
+        </div>
     </div>
 
     <div class="section-title">Leaderboard</div>
@@ -415,7 +467,10 @@ body {
         <tr>
             <th>#</th>
             <th>Mod</th>
+            <th>Role</th>
             <th>Score</th>
+            <th>Impact</th>
+            <th>Consist</th>
             <th>Msgs</th>
             <th>Warn</th>
             <th>Mute</th>
@@ -425,6 +480,7 @@ body {
             <th>Days</th>
             <th>Trend</th>
             <th>Eligible</th>
+            <th>Bonus</th>
             <th>Reward</th>
         </tr>
         </thead>

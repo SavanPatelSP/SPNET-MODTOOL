@@ -34,11 +34,13 @@ class SettingsService
         $progressEnabled = !empty($progressDefaults['enabled']) ? 1 : 0;
         $progressDay = (int)($progressDefaults['day'] ?? 15);
         $progressHour = (int)($progressDefaults['hour'] ?? 12);
+        $approvals = $this->config['approvals'] ?? [];
+        $approvalRequired = !empty($approvals['default_required']) ? 1 : 0;
 
         $this->db->exec(
-            'INSERT INTO settings (chat_id, reward_budget, timezone, active_gap_minutes, active_floor_minutes, auto_report_enabled, auto_report_day, auto_report_hour, progress_report_enabled, progress_report_day, progress_report_hour, updated_at)
-             VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [$chatId, $timezone, $gap, $floor, $autoEnabled, $autoDay, $autoHour, $progressEnabled, $progressDay, $progressHour, $this->nowUtc()]
+            'INSERT INTO settings (chat_id, reward_budget, timezone, active_gap_minutes, active_floor_minutes, auto_report_enabled, auto_report_day, auto_report_hour, progress_report_enabled, progress_report_day, progress_report_hour, approval_required, updated_at)
+             VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [$chatId, $timezone, $gap, $floor, $autoEnabled, $autoDay, $autoHour, $progressEnabled, $progressDay, $progressHour, $approvalRequired, $this->nowUtc()]
         );
 
         return [
@@ -53,7 +55,16 @@ class SettingsService
             'progress_report_enabled' => $progressEnabled,
             'progress_report_day' => $progressDay,
             'progress_report_hour' => $progressHour,
+            'approval_required' => $approvalRequired,
         ];
+    }
+
+    public function updateApprovalRequired(int|string $chatId, bool $required): void
+    {
+        $this->db->exec(
+            'UPDATE settings SET approval_required = ?, updated_at = ? WHERE chat_id = ?',
+            [$required ? 1 : 0, $this->nowUtc(), $chatId]
+        );
     }
 
     public function updateBudget(int|string $chatId, float $budget): void

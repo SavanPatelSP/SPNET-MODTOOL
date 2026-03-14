@@ -14,6 +14,8 @@ use App\Services\CoachingService;
 use App\Services\HealthService;
 use App\Services\RosterService;
 use App\Services\ArchiveService;
+use App\Services\ReportApprovalService;
+use App\Services\AuditLogService;
 use App\Reports\RewardSheet;
 use App\Reports\RewardCsv;
 use App\Reports\MultiChatReport;
@@ -39,6 +41,8 @@ class UpdateHandler
     private HealthService $health;
     private RosterService $roster;
     private ArchiveService $archive;
+    private ReportApprovalService $approvals;
+    private AuditLogService $audit;
     private RewardSheet $rewardSheet;
     private RewardCsv $rewardCsv;
     private MultiChatReport $multiChatReport;
@@ -59,10 +63,12 @@ class UpdateHandler
         $this->rewardContext = new RewardContextService($db, $config);
         $this->rewardHistory = new RewardHistoryService($db);
         $this->archive = new ArchiveService($db);
+        $this->approvals = new ReportApprovalService($db);
+        $this->audit = new AuditLogService($db);
         $this->coaching = new CoachingService($this->stats, $this->settings, $config);
         $this->health = new HealthService($this->stats, $this->settings, $config);
         $this->roster = new RosterService($db);
-        $this->rewardSheet = new RewardSheet($this->stats, $this->rewards, $config, $this->rewardContext, $this->rewardHistory, $this->archive);
+        $this->rewardSheet = new RewardSheet($this->stats, $this->rewards, $config, $this->rewardContext, $this->rewardHistory, $this->archive, $this->approvals);
         $this->rewardCsv = new RewardCsv($this->stats, $this->rewards, $this->rewardContext, $this->rewardHistory, $this->archive);
         $this->multiChatReport = new MultiChatReport($this->stats, $this->rewards, $config);
         $this->executiveSummary = new ExecutiveSummary($this->stats, $this->rewards, $config, $this->rewardContext, $this->archive);
@@ -91,6 +97,13 @@ class UpdateHandler
         $chat = $message['chat'];
         $chatId = $chat['id'];
         $chatType = $chat['type'] ?? 'private';
+
+        if ($chatType !== 'private' && !$this->isWhitelisted($chatId)) {
+            if (!empty($message['text']) && $this->parseCommand($message['text'])) {
+                $this->tg->sendMessage($chatId, 'This bot is not authorized for this chat.', ['parse_mode' => 'HTML']);
+            }
+            return;
+        }
 
         $this->upsertChat($chat);
         $this->settings->get($chatId);
@@ -151,6 +164,9 @@ class UpdateHandler
 
         $chat = $chatMemberUpdate['chat'];
         $chatId = $chat['id'];
+        if (!$this->isWhitelisted($chatId)) {
+            return;
+        }
         $this->upsertChat($chat);
         $this->settings->get($chatId);
 
@@ -194,7 +210,7 @@ class UpdateHandler
             'usechat', 'modadd', 'modremove', 'modlist',
             'plan', 'setplan', 'coach', 'health', 'trend', 'execsummary', 'archive',
             'rosteradd', 'rosterremove', 'rosterlist', 'rosterrole',
-            'premium', 'benefits', 'pricing', 'guide', 'giftplan', 'grantplan',
+            'premium', 'benefits', 'pricing', 'guide', 'giftplan', 'grantplan', 'approval', 'approvereport', 'approvalstatus', 'auditlogcsv',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
 
@@ -226,6 +242,26 @@ class UpdateHandler
 
             if (in_array($command, ['giftplan', 'grantplan'], true)) {
                 $this->handleGiftPlan($chatId, $args, $userId);
+                return;
+            }
+
+            if ($command === 'approval') {
+                $this->handleApprovalToggle($chatId, $args, $userId);
+                return;
+            }
+
+            if ($command === 'approvereport') {
+                $this->handleApproveReport($chatId, $args, $userId);
+                return;
+            }
+
+            if ($command === 'approvalstatus') {
+                $this->handleApprovalStatus($chatId, $args, $userId);
+                return;
+            }
+
+            if ($command === 'auditlogcsv') {
+                $this->handleAuditLogCsv($chatId, $args, $userId);
                 return;
             }
 
@@ -747,6 +783,10 @@ class UpdateHandler
         if ($this->shouldLog('log_commands')) {
             Logger::info('Plan updated for chat ' . $chatId . ' -> ' . strtoupper($sub['plan']));
         }
+        $this->audit->log('plan_set', $userId, (int)$chatId, [
+            'plan' => $sub['plan'],
+            'days' => $days,
+        ]);
     }
 
     private function handleGiftPlan(int|string $responseChatId, string $args, int|string $userId): void
@@ -793,6 +833,139 @@ class UpdateHandler
         if ($this->shouldLog('log_commands')) {
             Logger::info('Gifted plan ' . $plan . ' chat ' . $chatId . ' days ' . ($days ?? 0) . ' by ' . $userId);
         }
+        $this->audit->log('plan_gift', $userId, $chatId, [
+            'plan' => $sub['plan'] ?? $plan,
+            'days' => $days,
+            'note' => $note,
+        ]);
+    }
+
+    private function handleApprovalToggle(int|string $responseChatId, string $args, int|string $userId): void
+    {
+        if (!$this->isManager($userId)) {
+            $this->tg->sendMessage($responseChatId, 'Only bot managers or owners can change approval settings.', ['parse_mode' => 'HTML']);
+            return;
+        }
+        $tokens = preg_split('/\\s+/', trim($args));
+        $mode = strtolower($tokens[0] ?? '');
+        $chatToken = $tokens[1] ?? '';
+        if (!in_array($mode, ['on', 'off'], true) || $chatToken === '') {
+            $this->tg->sendMessage($responseChatId, 'Usage: /approval on|off &lt;chat_id&gt;', ['parse_mode' => 'HTML']);
+            return;
+        }
+        if (!preg_match('/^-?\\d+$/', $chatToken)) {
+            $this->tg->sendMessage($responseChatId, 'Chat id must be numeric.', ['parse_mode' => 'HTML']);
+            return;
+        }
+        $chatId = (int)$chatToken;
+        $required = $mode === 'on';
+        $this->settings->updateApprovalRequired($chatId, $required);
+        $this->tg->sendMessage($responseChatId, 'Approval requirement updated for ' . $chatId . ': ' . ($required ? 'ON' : 'OFF'), ['parse_mode' => 'HTML']);
+        $this->audit->log('approval_toggle', $userId, $chatId, ['required' => $required]);
+    }
+
+    private function handleApproveReport(int|string $responseChatId, string $args, int|string $userId): void
+    {
+        if (!$this->isManager($userId)) {
+            $this->tg->sendMessage($responseChatId, 'Only bot managers or owners can approve reports.', ['parse_mode' => 'HTML']);
+            return;
+        }
+        $tokens = preg_split('/\\s+/', trim($args));
+        $chatToken = $tokens[0] ?? '';
+        $month = $tokens[1] ?? null;
+        if ($chatToken === '') {
+            $this->tg->sendMessage($responseChatId, 'Usage: /approvereport &lt;chat_id&gt; [YYYY-MM]', ['parse_mode' => 'HTML']);
+            return;
+        }
+        if (!preg_match('/^-?\\d+$/', $chatToken)) {
+            $this->tg->sendMessage($responseChatId, 'Chat id must be numeric.', ['parse_mode' => 'HTML']);
+            return;
+        }
+        if ($month !== null && !preg_match('/^\\d{4}-\\d{2}$/', $month)) {
+            $this->tg->sendMessage($responseChatId, 'Month must be YYYY-MM.', ['parse_mode' => 'HTML']);
+            return;
+        }
+        $chatId = (int)$chatToken;
+        $month = $month ?? gmdate('Y-m');
+        $this->approvals->approve($chatId, $month, $userId, 'reward');
+        $this->tg->sendMessage($responseChatId, 'Report approved for ' . $chatId . ' (' . $month . ').', ['parse_mode' => 'HTML']);
+        $this->audit->log('report_approved', $userId, $chatId, ['month' => $month]);
+    }
+
+    private function handleApprovalStatus(int|string $responseChatId, string $args, int|string $userId): void
+    {
+        if (!$this->isManager($userId)) {
+            $this->tg->sendMessage($responseChatId, 'Only bot managers or owners can view approval status.', ['parse_mode' => 'HTML']);
+            return;
+        }
+        $tokens = preg_split('/\\s+/', trim($args));
+        $chatToken = $tokens[0] ?? '';
+        $month = $tokens[1] ?? null;
+        if ($chatToken === '') {
+            $this->tg->sendMessage($responseChatId, 'Usage: /approvalstatus &lt;chat_id&gt; [YYYY-MM]', ['parse_mode' => 'HTML']);
+            return;
+        }
+        if (!preg_match('/^-?\\d+$/', $chatToken)) {
+            $this->tg->sendMessage($responseChatId, 'Chat id must be numeric.', ['parse_mode' => 'HTML']);
+            return;
+        }
+        if ($month !== null && !preg_match('/^\\d{4}-\\d{2}$/', $month)) {
+            $this->tg->sendMessage($responseChatId, 'Month must be YYYY-MM.', ['parse_mode' => 'HTML']);
+            return;
+        }
+        $chatId = (int)$chatToken;
+        $month = $month ?? gmdate('Y-m');
+        $status = $this->approvals->getStatus($chatId, $month, 'reward');
+        $lines = [
+            '<b>Approval Status</b>',
+            'Chat: ' . $chatId,
+            'Month: ' . $month,
+            'Status: ' . $this->escape($status['status'] ?? 'pending'),
+        ];
+        if (!empty($status['approved_at'])) {
+            $lines[] = 'Approved at: ' . $this->escape($status['approved_at']);
+        }
+        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+    }
+
+    private function handleAuditLogCsv(int|string $responseChatId, string $args, int|string $userId): void
+    {
+        if (!$this->isManager($userId)) {
+            $this->tg->sendMessage($responseChatId, 'Only bot managers or owners can export audit logs.', ['parse_mode' => 'HTML']);
+            return;
+        }
+        $tokens = preg_split('/\\s+/', trim($args));
+        $chatToken = $tokens[0] ?? null;
+        $limit = isset($tokens[1]) && is_numeric($tokens[1]) ? (int)$tokens[1] : 200;
+        $chatId = null;
+        if ($chatToken && preg_match('/^-?\\d+$/', $chatToken)) {
+            $chatId = (int)$chatToken;
+        } elseif ($chatToken !== null && $chatToken !== '') {
+            $this->tg->sendMessage($responseChatId, 'Usage: /auditlogcsv [chat_id] [limit]', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $rows = $this->audit->list($chatId, $limit);
+        if (empty($rows)) {
+            $this->tg->sendMessage($responseChatId, 'No audit logs found.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $suffix = $chatId ? ('chat-' . $chatId) : 'all';
+        $file = __DIR__ . '/../storage/reports/audit-log-' . $suffix . '-' . gmdate('Y-m-d') . '.csv';
+        $fp = fopen($file, 'w');
+        fputcsv($fp, ['action', 'actor_id', 'chat_id', 'meta', 'created_at']);
+        foreach ($rows as $row) {
+            fputcsv($fp, [
+                $row['action'] ?? '',
+                $row['actor_id'] ?? '',
+                $row['chat_id'] ?? '',
+                $row['meta'] ?? '',
+                $row['created_at'] ?? '',
+            ]);
+        }
+        fclose($fp);
+        $this->tg->sendDocument($responseChatId, $file, 'Audit log export');
     }
 
     private function handleCoach(int|string $responseChatId, int|string $chatId, string $args): void
@@ -859,6 +1032,13 @@ class UpdateHandler
             $lines[] = 'Burnout risk:';
             foreach (array_slice($report['burnout'], 0, 5) as $name) {
                 $lines[] = '- ' . $this->escape($name);
+            }
+        }
+
+        if (!empty($report['coverage_gaps'])) {
+            $lines[] = 'Coverage gaps (no recent activity):';
+            foreach (array_slice($report['coverage_gaps'], 0, 6) as $gap) {
+                $lines[] = '- ' . $this->escape($gap);
             }
         }
 
@@ -1413,18 +1593,32 @@ class UpdateHandler
     private function getUserChats(int|string $userId, int $limit): array
     {
         $limit = max(1, min(50, (int)$limit));
+        $security = $this->config['security'] ?? [];
+        $whitelist = $security['whitelist_chat_ids'] ?? [];
+        $params = [$userId];
+        $where = 'cm.user_id = ? AND c.type IN (\'group\', \'supergroup\')';
+        if (is_array($whitelist) && !empty($whitelist)) {
+            $placeholders = implode(',', array_fill(0, count($whitelist), '?'));
+            $where .= ' AND c.id IN (' . $placeholders . ')';
+            foreach ($whitelist as $id) {
+                $params[] = (int)$id;
+            }
+        }
         $sql = 'SELECT c.id, c.title, c.type, cm.is_mod, cm.updated_at
                 FROM chat_members cm
                 JOIN chats c ON c.id = cm.chat_id
-                WHERE cm.user_id = ? AND c.type IN (\'group\', \'supergroup\')
+                WHERE ' . $where . '
                 ORDER BY cm.updated_at DESC
                 LIMIT ' . $limit;
 
-        return $this->db->fetchAll($sql, [$userId]);
+        return $this->db->fetchAll($sql, $params);
     }
 
     private function userHasChat(int|string $userId, int|string $chatId): bool
     {
+        if (!$this->isWhitelisted($chatId)) {
+            return false;
+        }
         $row = $this->db->fetch(
             'SELECT 1 FROM chat_members cm JOIN chats c ON c.id = cm.chat_id WHERE cm.user_id = ? AND cm.chat_id = ? AND c.type IN (\'group\', \'supergroup\') LIMIT 1',
             [$userId, $chatId]
@@ -1707,6 +1901,22 @@ class UpdateHandler
         return false;
     }
 
+    private function isWhitelisted(int|string $chatId): bool
+    {
+        $security = $this->config['security'] ?? [];
+        $whitelist = $security['whitelist_chat_ids'] ?? [];
+        if (!is_array($whitelist) || empty($whitelist)) {
+            return true;
+        }
+        $chatId = (int)$chatId;
+        foreach ($whitelist as $id) {
+            if ((int)$id === $chatId) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private function isMod(int|string $chatId, int|string $userId): bool
     {
         $row = $this->db->fetch('SELECT is_mod FROM chat_members WHERE chat_id = ? AND user_id = ?', [$chatId, $userId]);
@@ -1889,6 +2099,11 @@ class UpdateHandler
                 '/plan',
                 '/setplan &lt;free|premium|enterprise&gt; [days] (owner only)',
                 '/giftplan &lt;chat_id&gt; &lt;free|premium|enterprise&gt; [days] [note] (manager/owner)',
+                '/grantplan &lt;chat_id&gt; &lt;free|premium|enterprise&gt; [days] [note] (manager/owner)',
+                '/approval on|off &lt;chat_id&gt; (manager/owner)',
+                '/approvereport &lt;chat_id&gt; [YYYY-MM] (manager/owner)',
+                '/approvalstatus &lt;chat_id&gt; [YYYY-MM] (manager/owner)',
+                '/auditlogcsv [chat_id] [limit] (manager/owner)',
                 '/coach [YYYY-MM]',
                 '/health [YYYY-MM]',
                 '/trend [YYYY-MM] [budget]',
@@ -1991,6 +2206,12 @@ class UpdateHandler
             '<code>/autoreport on 1 9</code>',
             '<code>/autoprogress on 15 12</code>',
             '',
+            '<b>Approvals + audit log</b>',
+            '<code>/approval on</code>',
+            '<code>/approvereport 2026-02</code>',
+            '<code>/approvalstatus 2026-02</code>',
+            '<code>/auditlogcsv 200</code>',
+            '',
             '<b>Premium insights</b>',
             '<code>/coach 2026-02</code>',
             '<code>/health 2026-02</code>',
@@ -2019,6 +2240,8 @@ class UpdateHandler
         $lines[] = '<b>Stats for ' . $this->escape($name) . '</b>';
         $lines[] = 'Month: ' . $range['label'];
         $lines[] = 'Score: ' . number_format($stat['score'], 2);
+        $lines[] = 'Impact score: ' . number_format((float)($stat['impact_score'] ?? 0), 2);
+        $lines[] = 'Consistency: ' . number_format((float)($stat['consistency_index'] ?? 0), 1) . '%';
         $lines[] = 'Messages: ' . $stat['messages'];
         $lines[] = 'Warnings issued: ' . $stat['warnings'];
         $lines[] = 'Mutes issued: ' . $stat['mutes'];
@@ -2029,6 +2252,9 @@ class UpdateHandler
         $lines[] = 'Peak hour: ' . $stat['peak_hour'];
         if ($stat['improvement'] !== null) {
             $lines[] = 'Improvement vs last month: ' . number_format($stat['improvement'], 1) . '%';
+        }
+        if (isset($stat['trend_3m']) && $stat['trend_3m'] !== null) {
+            $lines[] = '3-month trend: ' . ($stat['trend_3m'] >= 0 ? '+' : '') . number_format($stat['trend_3m'], 1) . '%';
         }
         return implode("\n", $lines);
     }
@@ -2042,9 +2268,13 @@ class UpdateHandler
 
         $rank = 1;
         foreach ($ranked as $mod) {
-            $lines[] = $rank . '. ' . $this->escape($mod['display_name']) .
+            $line = $rank . '. ' . $this->escape($mod['display_name']) .
                 ' | Score ' . number_format($mod['score'], 2) .
                 ' | Reward ' . number_format($mod['reward'], 2);
+            if (!empty($mod['bonus'])) {
+                $line .= ' | Bonus ' . number_format((float)$mod['bonus'], 2);
+            }
+            $lines[] = $line;
             $rank++;
         }
 

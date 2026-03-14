@@ -50,6 +50,7 @@ return [
         'active_minutes_cap' => 30000,
         'membership_minutes_cap' => 60000,
         'min_days_for_full' => 7,
+        'normalize_by_days' => true,
     ],
 
     // Eligibility rules (minimums for rewards)
@@ -57,6 +58,8 @@ return [
         'min_days_active' => 3,
         'min_messages' => 20,
         'min_score' => 0,
+        'min_actions' => 0,
+        'min_active_hours' => 0,
     ],
 
     // Reward distribution settings
@@ -68,7 +71,34 @@ return [
             3 => 1.05,
         ],
         'min_reward' => 0.00,
+        // Bonus pool for KPI awards (Top Mod / Most Active / Most Improved)
+        'kpi_bonus_percent' => 0.10,
+        'kpi_bonus_split' => [
+            'top_mod' => 0.4,
+            'most_active' => 0.35,
+            'most_improved' => 0.25,
+        ],
     ],
+
+    // Role multipliers for score weighting (from /roster roles)
+    'role_multipliers' => [
+        'senior' => 1.15,
+        'lead' => 1.10,
+        'mod' => 1.00,
+        'trial' => 0.85,
+        'night' => 1.05,
+    ],
+
+    // Impact score weights (separate from reward score)
+    'impact_weights' => [
+        'message' => 0.2,
+        'warn' => 2.0,
+        'mute' => 5.0,
+        'ban' => 8.0,
+        'active_minute' => 0.05,
+    ],
+    'impact_recency_days' => 7,
+    'impact_recency_multiplier' => 1.1,
 
     // Premium feature defaults
     'premium' => [
@@ -85,12 +115,24 @@ return [
             'workload_share_alert' => 0.45,
             'burnout_multiplier' => 1.8,
             'inactive_days_alert' => 7,
+            'coverage_gap_hours' => 6,
         ],
         'notifications' => [
             'owner_dm' => true,
             'mid_month_alert' => true,
             'congrats' => true,
         ],
+    ],
+
+    // Approval workflow (reward sheets)
+    'approvals' => [
+        'enabled' => true,
+        'default_required' => false,
+    ],
+
+    // Security / whitelist
+    'security' => [
+        'whitelist_chat_ids' => [],
     ],
 
     // Polling speed (long-poll)

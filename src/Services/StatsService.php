@@ -60,6 +60,48 @@ class StatsService
         }
         unset($modStat);
 
+        $trendMap = [];
+        if (!empty($range['start_local']) && $range['start_local'] instanceof DateTimeImmutable) {
+            $trendScores = [];
+            $trendCounts = [];
+            for ($i = 1; $i <= 3; $i++) {
+                $trendStart = $range['start_local']->modify('-' . $i . ' month');
+                $trendEnd = $trendStart->modify('first day of next month');
+                $trendRange = $this->customRange($trendStart, $trendEnd, $trendStart->format('F Y'));
+                $trendStats = $this->buildStats($chatId, $mods, $trendRange, $settings, $timezone);
+                foreach ($trendStats as $row) {
+                    $uid = $row['user_id'];
+                    $trendScores[$uid] = ($trendScores[$uid] ?? 0) + ($row['score'] ?? 0);
+                    $trendCounts[$uid] = ($trendCounts[$uid] ?? 0) + 1;
+                }
+            }
+            foreach ($trendScores as $uid => $sum) {
+                $count = $trendCounts[$uid] ?? 0;
+                if ($count > 0) {
+                    $trendMap[$uid] = $sum / $count;
+                }
+            }
+        }
+
+        foreach ($stats as &$modStat) {
+            $base = $trendMap[$modStat['user_id']] ?? 0.0;
+            if ($base > 0) {
+                $delta = (($modStat['score'] - $base) / $base) * 100.0;
+                $modStat['trend_3m'] = $delta;
+                if ($delta >= 5) {
+                    $modStat['trend_3m_dir'] = 'up';
+                } elseif ($delta <= -5) {
+                    $modStat['trend_3m_dir'] = 'down';
+                } else {
+                    $modStat['trend_3m_dir'] = 'flat';
+                }
+            } else {
+                $modStat['trend_3m'] = null;
+                $modStat['trend_3m_dir'] = 'flat';
+            }
+        }
+        unset($modStat);
+
         $summary = $this->buildSummary($stats);
 
         return [
@@ -117,6 +159,8 @@ class StatsService
                         'first_name' => $mod['first_name'] ?? null,
                         'last_name' => $mod['last_name'] ?? null,
                         'display_name' => $mod['display_name'] ?? $this->displayName($mod),
+                        'role' => null,
+                        'role_multiplier' => 1.0,
                         'messages' => 0,
                         'internal_messages' => 0,
                         'external_messages' => 0,
@@ -132,6 +176,11 @@ class StatsService
                         'peak_hour' => $mod['peak_hour'] ?? '',
                         'score' => 0,
                         'improvement' => null,
+                        'impact_score' => 0,
+                        'consistency_index' => 0,
+                        'last_active_at' => null,
+                        'trend_3m' => null,
+                        'trend_3m_dir' => 'flat',
                     ];
                 }
 
@@ -146,10 +195,22 @@ class StatsService
                 $aggregate[$userId]['external_active_minutes'] += (float)($mod['external_active_minutes'] ?? 0);
                 $aggregate[$userId]['membership_minutes'] += (float)($mod['membership_minutes'] ?? 0);
                 $aggregate[$userId]['days_active'] += (int)($mod['days_active'] ?? 0);
+                $incomingLast = $mod['last_active_at'] ?? null;
+                if ($incomingLast) {
+                    $currentLast = $aggregate[$userId]['last_active_at'];
+                    if ($currentLast === null || strtotime($incomingLast) > strtotime((string)$currentLast)) {
+                        $aggregate[$userId]['last_active_at'] = $incomingLast;
+                    }
+                }
             }
         }
 
         $weights = $this->config['score_weights'] ?? [];
+        $impactWeights = $this->config['impact_weights'] ?? [];
+        $totalDays = 1;
+        if ($range && isset($range['start_local'], $range['end_local']) && $range['start_local'] instanceof DateTimeImmutable && $range['end_local'] instanceof DateTimeImmutable) {
+            $totalDays = max(1, (int)$range['start_local']->diff($range['end_local'])->days);
+        }
         foreach ($aggregate as &$mod) {
             $mod['actions_total'] = $mod['warnings'] + $mod['mutes'] + $mod['bans'];
             $mod['score'] = $this->computeScore([
@@ -161,6 +222,16 @@ class StatsService
                 'membership_minutes' => $mod['membership_minutes'],
                 'days_active' => $mod['days_active'],
             ], $weights);
+            $mod['impact_score'] = $this->computeImpactScore([
+                'messages' => $mod['messages'],
+                'warnings' => $mod['warnings'],
+                'mutes' => $mod['mutes'],
+                'bans' => $mod['bans'],
+                'active_minutes' => $mod['active_minutes'],
+                'last_active_at' => $mod['last_active_at'],
+                'range_end' => $range['end_utc'] ?? null,
+            ], $impactWeights);
+            $mod['consistency_index'] = $totalDays > 0 ? min(100, round(($mod['days_active'] / $totalDays) * 100, 1)) : 0;
         }
         unset($mod);
 
@@ -242,6 +313,11 @@ class StatsService
     private function buildStats(int|string $chatId, array $mods, array $range, array $settings, string $timezone): array
     {
         $modIds = array_map(fn($mod) => (int)$mod['user_id'], $mods);
+        $roleMap = $this->getRoleMap($chatId);
+        $totalDays = 1;
+        if (!empty($range['start_local']) && !empty($range['end_local']) && $range['start_local'] instanceof DateTimeImmutable && $range['end_local'] instanceof DateTimeImmutable) {
+            $totalDays = max(1, (int)$range['start_local']->diff($range['end_local'])->days);
+        }
         $modPlaceholders = implode(',', array_fill(0, count($modIds), '?'));
 
         $messageRows = $this->db->fetchAll(
@@ -277,12 +353,15 @@ class StatsService
         $externalStats = $this->getExternalStatsMap($chatId, $range['month']);
 
         $weights = $this->config['score_weights'] ?? [];
+        $impactWeights = $this->config['impact_weights'] ?? [];
         $gap = (int)($settings['active_gap_minutes'] ?? $this->config['active_gap_minutes'] ?? 5);
         $floor = (int)($settings['active_floor_minutes'] ?? $this->config['active_floor_minutes'] ?? 1);
 
         $stats = [];
         foreach ($mods as $mod) {
             $userId = (int)$mod['user_id'];
+            $role = $roleMap[$userId]['role'] ?? null;
+            $roleMultiplier = $this->getRoleMultiplier($role);
             $timestamps = $messagesByUser[$userId] ?? [];
             $lastActiveAt = null;
             if (!empty($timestamps)) {
@@ -318,6 +397,24 @@ class StatsService
                 'membership_minutes' => $membershipMinutes,
                 'days_active' => $daysActive,
             ], $weights);
+            if ($roleMultiplier !== 1.0) {
+                $score = round($score * $roleMultiplier, 2);
+            }
+
+            $impactScore = $this->computeImpactScore([
+                'messages' => $messageCount,
+                'warnings' => $warnings,
+                'mutes' => $mutes,
+                'bans' => $bans,
+                'active_minutes' => $activeMinutes,
+                'last_active_at' => $lastActiveAt,
+                'range_end' => $range['end_utc'],
+            ], $impactWeights);
+            if ($roleMultiplier !== 1.0) {
+                $impactScore = round($impactScore * $roleMultiplier, 2);
+            }
+
+            $consistency = round(($daysActive / $totalDays) * 100, 1);
 
             $stats[] = [
                 'user_id' => $userId,
@@ -325,6 +422,8 @@ class StatsService
                 'first_name' => $mod['first_name'],
                 'last_name' => $mod['last_name'],
                 'display_name' => $this->displayName($mod),
+                'role' => $role,
+                'role_multiplier' => $roleMultiplier,
                 'messages' => $messageCount,
                 'internal_messages' => $internalMessageCount,
                 'external_messages' => $externalMessageCount,
@@ -337,9 +436,11 @@ class StatsService
                 'active_minutes' => $activeMinutes,
                 'membership_minutes' => $membershipMinutes,
                 'days_active' => $daysActive,
+                'consistency_index' => $consistency,
                 'peak_hour' => $peakHour,
                 'last_active_at' => $lastActiveAt,
                 'score' => $score,
+                'impact_score' => $impactScore,
             ];
         }
 
@@ -408,6 +509,40 @@ class StatsService
         }
 
         return $map;
+    }
+
+    private function getRoleMap(int|string $chatId): array
+    {
+        $rows = $this->db->fetchAll(
+            'SELECT user_id, role FROM mod_roster WHERE chat_id = ?',
+            [$chatId]
+        );
+        $map = [];
+        foreach ($rows as $row) {
+            $map[(int)$row['user_id']] = [
+                'role' => $row['role'] ?? null,
+            ];
+        }
+        return $map;
+    }
+
+    private function getRoleMultiplier(?string $role): float
+    {
+        if ($role === null || trim($role) === '') {
+            return 1.0;
+        }
+        $roleKey = strtolower(trim($role));
+        $map = $this->config['role_multipliers'] ?? [];
+        if (isset($map[$roleKey])) {
+            return (float)$map[$roleKey];
+        }
+        foreach ($map as $key => $value) {
+            $key = strtolower(trim((string)$key));
+            if ($key !== '' && strpos($roleKey, $key) !== false) {
+                return (float)$value;
+            }
+        }
+        return 1.0;
     }
 
     private function getMods(int|string $chatId): array
@@ -540,6 +675,39 @@ class StatsService
         return round($total, 2);
     }
 
+    private function computeImpactScore(array $metrics, array $weights): float
+    {
+        $messages = (int)($metrics['messages'] ?? 0);
+        $warnings = (int)($metrics['warnings'] ?? 0);
+        $mutes = (int)($metrics['mutes'] ?? 0);
+        $bans = (int)($metrics['bans'] ?? 0);
+        $activeMinutes = (float)($metrics['active_minutes'] ?? 0);
+
+        $impact = 0.0;
+        $impact += log(1 + $messages) * ($weights['message'] ?? 0.2);
+        $impact += $warnings * ($weights['warn'] ?? 2.0);
+        $impact += $mutes * ($weights['mute'] ?? 5.0);
+        $impact += $bans * ($weights['ban'] ?? 8.0);
+        $impact += sqrt($activeMinutes) * ($weights['active_minute'] ?? 0.05);
+
+        $recencyDays = (int)($this->config['impact_recency_days'] ?? 0);
+        $recencyBoost = (float)($this->config['impact_recency_multiplier'] ?? 1.0);
+        $lastActiveAt = $metrics['last_active_at'] ?? null;
+        $rangeEnd = $metrics['range_end'] ?? null;
+        if ($recencyDays > 0 && $recencyBoost > 1.0 && $lastActiveAt && $rangeEnd) {
+            $last = strtotime((string)$lastActiveAt);
+            $end = strtotime((string)$rangeEnd);
+            if ($last && $end) {
+                $daysSince = ($end - $last) / 86400;
+                if ($daysSince <= $recencyDays) {
+                    $impact *= $recencyBoost;
+                }
+            }
+        }
+
+        return round($impact, 2);
+    }
+
     private function computeScore(array $metrics, array $weights): float
     {
         $rules = $this->config['score_rules'] ?? [];
@@ -560,6 +728,13 @@ class StatsService
         }
         if (isset($rules['membership_minutes_cap'])) {
             $membershipMinutes = min($membershipMinutes, (int)$rules['membership_minutes_cap']);
+        }
+
+        $normalizeByDays = !empty($rules['normalize_by_days']);
+        if ($normalizeByDays) {
+            $dayDivisor = max(1, $daysActive);
+            $messages = $messages / $dayDivisor;
+            $activeMinutes = $activeMinutes / $dayDivisor;
         }
 
         $score = 0.0;
@@ -595,9 +770,13 @@ class StatsService
             'external_active_minutes' => 0,
             'membership_minutes' => 0,
             'avg_score' => 0,
+            'avg_impact' => 0,
+            'avg_consistency' => 0,
         ];
 
         $scoreTotal = 0.0;
+        $impactTotal = 0.0;
+        $consistencyTotal = 0.0;
         foreach ($stats as $mod) {
             $summary['messages'] += $mod['messages'];
             $summary['internal_messages'] += $mod['internal_messages'] ?? 0;
@@ -610,9 +789,13 @@ class StatsService
             $summary['external_active_minutes'] += $mod['external_active_minutes'] ?? 0;
             $summary['membership_minutes'] += $mod['membership_minutes'];
             $scoreTotal += $mod['score'];
+            $impactTotal += $mod['impact_score'] ?? 0;
+            $consistencyTotal += $mod['consistency_index'] ?? 0;
         }
 
         $summary['avg_score'] = $summary['total_mods'] > 0 ? round($scoreTotal / $summary['total_mods'], 2) : 0;
+        $summary['avg_impact'] = $summary['total_mods'] > 0 ? round($impactTotal / $summary['total_mods'], 2) : 0;
+        $summary['avg_consistency'] = $summary['total_mods'] > 0 ? round($consistencyTotal / $summary['total_mods'], 1) : 0;
 
         return $summary;
     }

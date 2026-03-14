@@ -57,12 +57,32 @@ class HealthService
             }
         }
 
+        $gapHours = (int)($this->config['premium']['health']['coverage_gap_hours'] ?? 0);
+        $coverageGaps = [];
+        if ($gapHours > 0) {
+            $rangeEnd = $range['end_utc'] ?? gmdate('Y-m-d H:i:s');
+            $endTs = strtotime($rangeEnd) ?: time();
+            foreach ($mods as $mod) {
+                $lastActive = $mod['last_active_at'] ?? null;
+                if (!$lastActive) {
+                    $coverageGaps[] = $mod['display_name'] . ' (no activity)';
+                    continue;
+                }
+                $lastTs = strtotime($lastActive);
+                if ($lastTs && (($endTs - $lastTs) / 3600) >= $gapHours) {
+                    $hoursAgo = number_format(($endTs - $lastTs) / 3600, 1);
+                    $coverageGaps[] = $mod['display_name'] . ' (' . $hoursAgo . 'h ago)';
+                }
+            }
+        }
+
         return [
             'range' => $range,
             'coverage' => $coverage,
             'top_share' => $topShare,
             'top_mod' => $topMod,
             'burnout' => $burnout,
+            'coverage_gaps' => $coverageGaps,
             'total_messages' => $totalMessages,
             'total_actions' => $totalActions,
         ];

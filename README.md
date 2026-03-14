@@ -8,6 +8,10 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
 - Monthly leaderboard and reward suggestions
 - Attractive HTML reward sheet (shareable)
 - Eligibility thresholds + anti-spam scoring
+- Impact score + consistency index + 3-month trend
+- KPI bonus pool (Top Mod / Most Active / Most Improved)
+- Approval workflow + audit log exports
+- Role multipliers for senior/lead moderators
 - Insights: most active, most improved, most consistent, peak hour
 - Live dashboard page (auto-refresh)
 - CSV export + Google Sheets webhook export
@@ -52,11 +56,15 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
    - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/010_notification_log.sql`
 12. Run the reward history migration:
    - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/011_reward_history.sql`
-13. Copy config overrides:
+13. Run the approvals migration:
+   - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/012_report_approvals.sql`
+14. Run the audit log migration:
+   - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/013_audit_log.sql`
+15. Copy config overrides:
    - `cp /Users/savanpatel/Documents/SPNET-MODTOOL/config.example.php /Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php`
-14. Edit `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` with your bot token and DB creds.
+16. Edit `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` with your bot token and DB creds.
     - Optional: add `owner_user_ids` and `manager_user_ids` for staff access.
-15. Run in long-poll mode:
+17. Run in long-poll mode:
    - `php /Users/savanpatel/Documents/SPNET-MODTOOL/bin/poll.php`
 
 ## Commands
@@ -77,6 +85,11 @@ Private chat commands:
 - `/plan`
 - `/setplan <free|premium|enterprise> [days]` (owner only)
 - `/giftplan <chat_id> <free|premium|enterprise> [days] [note]` (manager/owner)
+- `/grantplan <chat_id> <free|premium|enterprise> [days] [note]` (manager/owner)
+- `/approval on|off <chat_id>` (manager/owner)
+- `/approvereport <chat_id> [YYYY-MM]` (manager/owner)
+- `/approvalstatus <chat_id> [YYYY-MM]` (manager/owner)
+- `/auditlogcsv <chat_id> [limit]` (manager/owner)
 - `/premium` (see premium benefits)
 - `/pricing` (tiers + features)
 - `/coach [YYYY-MM]` (premium)
@@ -205,6 +218,7 @@ http://127.0.0.1:8000/dashboard.php?token=YOUR_TOKEN
 ```text
 http://127.0.0.1:8000/dashboard.php?token=YOUR_TOKEN&chat_id=-1001234567890&month=2026-02
 ```
+4. Use filters for Impact, Consistency, Role, and toggle Source breakdown to compare Bot vs ChatKeeper/Combot imports.
 
 ### 11) Import historical data (ChatKeeper/Combot)
 CLI import examples:
@@ -233,12 +247,20 @@ http://127.0.0.1:8000/import.php?token=YOUR_TOKEN
 /setplan premium 30
 ```
 
-### 14) Export to Google Sheets
+### 14) Approval workflow + audit log
+```text
+/approval on
+/approvereport 2026-02
+/approvalstatus 2026-02
+/auditlogcsv 200
+```
+
+### 15) Export to Google Sheets
 ```text
 /exportgsheet 2026-02 5000
 ```
 
-### 15) Troubleshooting
+### 16) Troubleshooting
 - Bot not responding: check DNS/network on the host, then run `curl -I https://api.telegram.org`.
 - "No permission": ensure you are an admin in that group or add your user id to `owner_user_ids` in `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php`.
 - "No mods are added": run `/modadd` first.
@@ -249,15 +271,19 @@ http://127.0.0.1:8000/import.php?token=YOUR_TOKEN
 - “Active time” is estimated from message gaps (configurable).
 - “Membership time” is time between join and leave events, not actual presence.
 - Scoring uses log/sqrt scaling and day normalization. Tune it in `score_weights` and `score_rules`.
-- Reward eligibility is controlled by `eligibility` in `config.local.php`.
+- Reward eligibility is controlled by `eligibility` in `config.local.php` (days, messages, score, actions, active hours).
+- Approvals can be required per chat with `/approval on`; audit logs are downloadable with `/auditlogcsv`.
+- Restrict the bot to specific groups by listing IDs in `security.whitelist_chat_ids`.
 
 ## Premium Features
 - Use `/plan` to view the current plan and `/setplan premium 30` to enable premium (owner only).
 - Fair reward engine with anti-spam caps + day normalization.
+- KPI bonus pool with Top Mod / Most Active / Most Improved badges.
 - Smarter rewards with max-share cap, stability bonus, and penalty decay (see `premium.reward` in config).
 - Coaching tips and team health (coverage gaps, workload balance, burnout risk).
 - Executive summary + trend report + PDF export.
 - Import wizard with ChatKeeper/Combot source breakdown.
+- Approval workflow + audit log exports.
 - Report archive + reward history.
 - Owner notifications (auto report DMs, mid-month alerts, congrats templates).
 - Log channel + changelog updates.

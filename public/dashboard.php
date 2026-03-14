@@ -40,6 +40,9 @@ $minMessages = isset($_GET['min_messages']) ? (int)$_GET['min_messages'] : 0;
 $minActions = isset($_GET['min_actions']) ? (int)$_GET['min_actions'] : 0;
 $minActiveHours = isset($_GET['min_active_hours']) ? (float)$_GET['min_active_hours'] : 0.0;
 $minScore = isset($_GET['min_score']) ? (float)$_GET['min_score'] : 0.0;
+$minImpact = isset($_GET['min_impact']) ? (float)$_GET['min_impact'] : 0.0;
+$minConsistency = isset($_GET['min_consistency']) ? (float)$_GET['min_consistency'] : 0.0;
+$roleFilter = trim((string)($_GET['role'] ?? ''));
 $onlyEligible = isset($_GET['only_eligible']);
 $onlyImproving = isset($_GET['only_improving']);
 $sortBy = $_GET['sort'] ?? 'score';
@@ -84,9 +87,11 @@ $ranked = $rewardService->rankAndReward($bundle['mods'], $budget, $context);
 $premium = (bool)($context['premium'] ?? false);
 
 $rewardMap = [];
+$bonusMap = [];
 $eligibleMap = [];
 foreach ($ranked as $mod) {
     $rewardMap[$mod['user_id']] = $mod['reward'];
+    $bonusMap[$mod['user_id']] = $mod['bonus'] ?? 0.0;
     if (array_key_exists('eligible', $mod)) {
         $eligibleMap[$mod['user_id']] = (bool)$mod['eligible'];
     }
@@ -103,12 +108,18 @@ $eligibilityRules = $config['eligibility'] ?? [];
 $minDaysRule = (int)($eligibilityRules['min_days_active'] ?? 0);
 $minMessagesRule = (int)($eligibilityRules['min_messages'] ?? 0);
 $minScoreRule = (float)($eligibilityRules['min_score'] ?? 0);
+$minActionsRule = (int)($eligibilityRules['min_actions'] ?? 0);
+$minActiveHoursRule = (float)($eligibilityRules['min_active_hours'] ?? 0);
 
 foreach ($mods as &$mod) {
     $mod['eligible'] = $eligibleMap[$mod['user_id']] ?? true;
     $mod['reward'] = $rewardMap[$mod['user_id']] ?? 0.0;
+    $mod['bonus'] = $bonusMap[$mod['user_id']] ?? 0.0;
     $mod['actions'] = (int)(($mod['warnings'] ?? 0) + ($mod['mutes'] ?? 0) + ($mod['bans'] ?? 0));
     $mod['active_hours'] = ($mod['active_minutes'] ?? 0) / 60;
+    $mod['impact_score'] = (float)($mod['impact_score'] ?? 0);
+    $mod['consistency_index'] = (float)($mod['consistency_index'] ?? 0);
+    $mod['role'] = $mod['role'] ?? '';
     $reasons = [];
     if ($minDaysRule > 0 && ($mod['days_active'] ?? 0) < $minDaysRule) {
         $reasons[] = 'Need ' . $minDaysRule . ' days';
@@ -119,13 +130,19 @@ foreach ($mods as &$mod) {
     if ($minScoreRule > 0 && ($mod['score'] ?? 0) < $minScoreRule) {
         $reasons[] = 'Score < ' . $minScoreRule;
     }
+    if ($minActionsRule > 0 && ($mod['actions'] ?? 0) < $minActionsRule) {
+        $reasons[] = 'Need ' . $minActionsRule . ' actions';
+    }
+    if ($minActiveHoursRule > 0 && ($mod['active_hours'] ?? 0) < $minActiveHoursRule) {
+        $reasons[] = 'Need ' . number_format($minActiveHoursRule, 1) . ' hrs';
+    }
     $mod['eligibility_reason'] = implode(', ', $reasons);
 }
 unset($mod);
 
 usort($mods, fn($a, $b) => $b['score'] <=> $a['score']);
 
-$modsFiltered = array_values(array_filter($mods, function (array $mod) use ($search, $minMessages, $minActions, $minActiveHours, $minScore, $onlyEligible, $onlyImproving): bool {
+$modsFiltered = array_values(array_filter($mods, function (array $mod) use ($search, $minMessages, $minActions, $minActiveHours, $minScore, $minImpact, $minConsistency, $roleFilter, $onlyEligible, $onlyImproving): bool {
     if ($onlyEligible && empty($mod['eligible'])) {
         return false;
     }
@@ -140,6 +157,19 @@ $modsFiltered = array_values(array_filter($mods, function (array $mod) use ($sea
     }
     if ($minScore > 0 && (float)($mod['score'] ?? 0) < $minScore) {
         return false;
+    }
+    if ($minImpact > 0 && (float)($mod['impact_score'] ?? 0) < $minImpact) {
+        return false;
+    }
+    if ($minConsistency > 0 && (float)($mod['consistency_index'] ?? 0) < $minConsistency) {
+        return false;
+    }
+    if ($roleFilter !== '') {
+        $role = strtolower(trim((string)($mod['role'] ?? '')));
+        $needleRole = strtolower($roleFilter);
+        if ($role === '' || strpos($role, $needleRole) === false) {
+            return false;
+        }
     }
     if ($onlyImproving) {
         $impr = $mod['improvement'] ?? null;
@@ -175,6 +205,12 @@ $sortKey = static function (array $mod, string $sortBy): float {
             return (float)($mod['days_active'] ?? 0);
         case 'reward':
             return (float)($mod['reward'] ?? 0);
+        case 'impact':
+            return (float)($mod['impact_score'] ?? 0);
+        case 'consistency':
+            return (float)($mod['consistency_index'] ?? 0);
+        case 'bonus':
+            return (float)($mod['bonus'] ?? 0);
         case 'improvement':
             return (float)($mod['improvement'] ?? -INF);
         default:
@@ -209,6 +245,8 @@ $eligibleRate = count($mods) > 0 ? round(($eligibleCount / count($mods)) * 100, 
 $mostImproved = null;
 $mostActions = null;
 $mostActive = null;
+$mostImpact = null;
+$mostConsistent = null;
 foreach ($modsFiltered as $mod) {
     if ($mod['improvement'] !== null) {
         if ($mostImproved === null || $mod['improvement'] > $mostImproved['improvement']) {
@@ -221,15 +259,23 @@ foreach ($modsFiltered as $mod) {
     if ($mostActive === null || ($mod['active_minutes'] ?? 0) > ($mostActive['active_minutes'] ?? 0)) {
         $mostActive = $mod;
     }
+    if ($mostImpact === null || ($mod['impact_score'] ?? 0) > ($mostImpact['impact_score'] ?? 0)) {
+        $mostImpact = $mod;
+    }
+    if ($mostConsistent === null || ($mod['consistency_index'] ?? 0) > ($mostConsistent['consistency_index'] ?? 0)) {
+        $mostConsistent = $mod;
+    }
 }
 
 $totalMessages = (int)($summary['messages'] ?? 0);
 $externalMessages = (int)($summary['external_messages'] ?? 0);
 $externalShare = $totalMessages > 0 ? round(($externalMessages / $totalMessages) * 100, 1) : 0;
 $internalMessageShare = $totalMessages > 0 ? round((($summary['internal_messages'] ?? 0) / $totalMessages) * 100, 1) : 0;
+$externalMessageShare = $totalMessages > 0 ? round(100 - $internalMessageShare, 1) : 0;
 
 $totalActiveMinutes = (int)($summary['active_minutes'] ?? 0);
 $internalActiveShare = $totalActiveMinutes > 0 ? round((($summary['internal_active_minutes'] ?? 0) / $totalActiveMinutes) * 100, 1) : 0;
+$externalActiveShare = $totalActiveMinutes > 0 ? round(100 - $internalActiveShare, 1) : 0;
 
 $totalActions = (int)(($summary['warnings'] ?? 0) + ($summary['mutes'] ?? 0) + ($summary['bans'] ?? 0));
 
@@ -245,6 +291,8 @@ $eligibilityGaps = [
     'days' => 0,
     'messages' => 0,
     'score' => 0,
+    'actions' => 0,
+    'active_hours' => 0,
 ];
 
 foreach ($mods as $mod) {
@@ -274,6 +322,12 @@ foreach ($mods as $mod) {
     if ($minScoreRule > 0 && ($mod['score'] ?? 0) < $minScoreRule) {
         $eligibilityGaps['score']++;
     }
+    if ($minActionsRule > 0 && ($mod['actions'] ?? 0) < $minActionsRule) {
+        $eligibilityGaps['actions']++;
+    }
+    if ($minActiveHoursRule > 0 && ($mod['active_hours'] ?? 0) < $minActiveHoursRule) {
+        $eligibilityGaps['active_hours']++;
+    }
 }
 
 $rewardMedian = 0.0;
@@ -292,6 +346,8 @@ if (!empty($rewardValues)) {
 $avgReward = $rewardedCount > 0 ? $rewardTotal / $rewardedCount : 0.0;
 $remainingBudget = $budget > 0 ? round($budget - $rewardTotal, 2) : null;
 $budgetUsedPercent = $budget > 0 ? min(100, max(0, ($rewardTotal / $budget) * 100)) : 0;
+$bonusPercent = (float)($config['reward']['kpi_bonus_percent'] ?? 0);
+$bonusPool = $budget > 0 ? round($budget * $bonusPercent, 2) : 0.0;
 
 $avgDaysActive = count($mods) > 0 ? round($totalDaysActive / count($mods), 1) : 0.0;
 $avgActiveHours = count($mods) > 0 ? round(($totalActiveMinutes / 60) / count($mods), 1) : 0.0;
@@ -333,6 +389,15 @@ if ($minActiveHours > 0) {
 if ($minScore > 0) {
     $filtersApplied[] = 'Min score: ' . $minScore;
 }
+if ($minImpact > 0) {
+    $filtersApplied[] = 'Min impact: ' . $minImpact;
+}
+if ($minConsistency > 0) {
+    $filtersApplied[] = 'Min consistency: ' . $minConsistency . '%';
+}
+if ($roleFilter !== '') {
+    $filtersApplied[] = 'Role: ' . $roleFilter;
+}
 if ($onlyEligible) {
     $filtersApplied[] = 'Eligible only';
 }
@@ -350,13 +415,34 @@ if ($showSources) {
 }
 $filtersText = empty($filtersApplied) ? 'No extra filters applied.' : implode(' • ', $filtersApplied);
 
+$eligibilityParts = [];
+if ($minDaysRule > 0) {
+    $eligibilityParts[] = $minDaysRule . ' days';
+}
+if ($minMessagesRule > 0) {
+    $eligibilityParts[] = $minMessagesRule . ' messages';
+}
+if ($minScoreRule > 0) {
+    $eligibilityParts[] = 'score ≥ ' . $minScoreRule;
+}
+if ($minActionsRule > 0) {
+    $eligibilityParts[] = $minActionsRule . ' actions';
+}
+if ($minActiveHoursRule > 0) {
+    $eligibilityParts[] = number_format($minActiveHoursRule, 1) . ' active hrs';
+}
+$eligibilityText = empty($eligibilityParts) ? 'No minimums set.' : ('Eligibility rules: ' . implode(', ', $eligibilityParts) . '.');
+
 $sortLabels = [
     'score' => 'Score',
+    'impact' => 'Impact',
+    'consistency' => 'Consistency',
     'messages' => 'Messages',
     'actions' => 'Actions',
     'active' => 'Active minutes',
     'days' => 'Active days',
     'reward' => 'Reward',
+    'bonus' => 'Bonus',
     'improvement' => 'Improvement',
 ];
 $sortLabel = $sortLabels[$sortBy] ?? ucfirst($sortBy);
@@ -410,7 +496,7 @@ $importUrl = 'import.php?' . http_build_query([
     'month' => $bundle['range']['month'] ?? '',
 ]);
 
-$colCount = $compact ? 10 : 13;
+$colCount = $compact ? 14 : 17;
 
 ?><!DOCTYPE html>
 <html lang="en">
@@ -715,7 +801,7 @@ label.check {
 }
 .table {
     width: 100%;
-    min-width: 920px;
+    min-width: 1180px;
     border-collapse: collapse;
 }
 .table th, .table td {
@@ -779,6 +865,20 @@ label.check {
     height: 100%;
     background: var(--accent);
 }
+.mini-bar {
+    margin-top: 6px;
+    height: 5px;
+    background: #eef0f4;
+    border-radius: 999px;
+    overflow: hidden;
+    display: flex;
+}
+.mini-bar span {
+    display: block;
+    height: 100%;
+}
+.mini-bar span.internal { background: #60a5fa; }
+.mini-bar span.external { background: #fbbf24; }
 .chat-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -834,7 +934,7 @@ label.check {
         gap: 6px;
     }
     .table {
-        min-width: 760px;
+        min-width: 980px;
     }
 }
 </style>
@@ -852,9 +952,12 @@ label.check {
                 <span class="chip">Msgs <?php echo (int)($summary['messages'] ?? 0); ?></span>
                 <span class="chip">Actions <?php echo $totalActions; ?></span>
                 <span class="chip">Eligible <?php echo $eligibleCount; ?>/<?php echo count($mods); ?></span>
-                <span class="chip">Ext Share <?php echo number_format($externalShare, 1); ?>%</span>
+                <span class="chip">External Share <?php echo number_format($externalShare, 1); ?>%</span>
                 <?php if (!$isAll): ?>
                     <span class="chip"><?php echo $premium ? 'Premium' : 'Free'; ?> Plan</span>
+                <?php endif; ?>
+                <?php if ($refresh > 0): ?>
+                    <span class="chip">Live Refresh</span>
                 <?php endif; ?>
             </div>
         </div>
@@ -944,6 +1047,18 @@ label.check {
                         <input type="number" step="0.1" name="min_score" value="<?php echo htmlspecialchars((string)$minScore, ENT_QUOTES, 'UTF-8'); ?>" />
                     </label>
                     <label>
+                        Min Impact
+                        <input type="number" step="0.1" name="min_impact" value="<?php echo htmlspecialchars((string)$minImpact, ENT_QUOTES, 'UTF-8'); ?>" />
+                    </label>
+                    <label>
+                        Min Consistency %
+                        <input type="number" step="0.1" name="min_consistency" value="<?php echo htmlspecialchars((string)$minConsistency, ENT_QUOTES, 'UTF-8'); ?>" />
+                    </label>
+                    <label>
+                        Role contains
+                        <input type="text" name="role" value="<?php echo htmlspecialchars((string)$roleFilter, ENT_QUOTES, 'UTF-8'); ?>" />
+                    </label>
+                    <label>
                         Limit
                         <input type="number" name="limit" value="<?php echo htmlspecialchars((string)$limit, ENT_QUOTES, 'UTF-8'); ?>" />
                     </label>
@@ -976,7 +1091,7 @@ label.check {
                 <button type="submit" class="button primary">Update Dashboard</button>
                 <a class="button ghost" href="<?php echo htmlspecialchars($resetUrl, ENT_QUOTES, 'UTF-8'); ?>">Reset Filters</a>
             </div>
-            <div class="panel-note">Eligibility rules: <?php echo $minDaysRule > 0 ? $minDaysRule . ' days' : 'no min days'; ?>, <?php echo $minMessagesRule > 0 ? $minMessagesRule . ' messages' : 'no min messages'; ?>, <?php echo $minScoreRule > 0 ? 'score ≥ ' . $minScoreRule : 'no min score'; ?>.</div>
+            <div class="panel-note"><?php echo htmlspecialchars($eligibilityText, ENT_QUOTES, 'UTF-8'); ?></div>
         </form>
     </div>
 
@@ -1001,10 +1116,10 @@ label.check {
             <div class="value"><?php echo (int)($summary['messages'] ?? 0); ?></div>
             <div class="subtext">Avg per mod <?php echo count($mods) > 0 ? number_format($totalMessages / count($mods), 1) : '0'; ?></div>
             <?php if ($showSources): ?>
-                <div class="source-breakdown">Bot <?php echo (int)($summary['internal_messages'] ?? 0); ?> | Ext <?php echo (int)($summary['external_messages'] ?? 0); ?></div>
+                <div class="source-breakdown">Bot <?php echo (int)($summary['internal_messages'] ?? 0); ?> | External (CK/Combot) <?php echo (int)($summary['external_messages'] ?? 0); ?></div>
                 <div class="progress split">
                     <span class="internal" style="width: <?php echo number_format($internalMessageShare, 1); ?>%"></span>
-                    <span class="external" style="width: <?php echo number_format(100 - $internalMessageShare, 1); ?>%"></span>
+                    <span class="external" style="width: <?php echo number_format($externalMessageShare, 1); ?>%"></span>
                 </div>
             <?php endif; ?>
         </div>
@@ -1013,10 +1128,10 @@ label.check {
             <div class="value"><?php echo number_format(($summary['active_minutes'] ?? 0) / 60, 1); ?>h</div>
             <div class="subtext">Avg per mod <?php echo number_format($avgActiveHours, 1); ?>h · <?php echo number_format($messagesPerActiveHour, 1); ?> msgs/hr</div>
             <?php if ($showSources): ?>
-                <div class="source-breakdown">Bot <?php echo number_format(($summary['internal_active_minutes'] ?? 0) / 60, 1); ?>h | Ext <?php echo number_format(($summary['external_active_minutes'] ?? 0) / 60, 1); ?>h</div>
+                <div class="source-breakdown">Bot <?php echo number_format(($summary['internal_active_minutes'] ?? 0) / 60, 1); ?>h | External (CK/Combot) <?php echo number_format(($summary['external_active_minutes'] ?? 0) / 60, 1); ?>h</div>
                 <div class="progress split">
                     <span class="internal" style="width: <?php echo number_format($internalActiveShare, 1); ?>%"></span>
-                    <span class="external" style="width: <?php echo number_format(100 - $internalActiveShare, 1); ?>%"></span>
+                    <span class="external" style="width: <?php echo number_format($externalActiveShare, 1); ?>%"></span>
                 </div>
             <?php endif; ?>
         </div>
@@ -1034,6 +1149,16 @@ label.check {
             <h3>Avg Score</h3>
             <div class="value"><?php echo number_format((float)($summary['avg_score'] ?? 0), 2); ?></div>
             <div class="subtext">Top 3 share <?php echo number_format($top3Share, 1); ?>%</div>
+        </div>
+        <div class="card">
+            <h3>Avg Impact</h3>
+            <div class="value"><?php echo number_format((float)($summary['avg_impact'] ?? 0), 2); ?></div>
+            <div class="subtext">Impact favors actions + recency.</div>
+        </div>
+        <div class="card">
+            <h3>Avg Consistency</h3>
+            <div class="value"><?php echo number_format((float)($summary['avg_consistency'] ?? 0), 1); ?>%</div>
+            <div class="subtext">Based on active days in month.</div>
         </div>
     </div>
 
@@ -1086,6 +1211,32 @@ label.check {
                 ?>
             </div>
         </div>
+        <div class="highlight-card">
+            <h4>Highest Impact</h4>
+            <div class="mod-name"><?php echo htmlspecialchars($mostImpact['display_name'] ?? 'N/A', ENT_QUOTES, 'UTF-8'); ?></div>
+            <div class="score">
+                <?php
+                    if (!empty($mostImpact)) {
+                        echo number_format((float)($mostImpact['impact_score'] ?? 0), 2);
+                    } else {
+                        echo 'N/A';
+                    }
+                ?>
+            </div>
+        </div>
+        <div class="highlight-card">
+            <h4>Most Consistent</h4>
+            <div class="mod-name"><?php echo htmlspecialchars($mostConsistent['display_name'] ?? 'N/A', ENT_QUOTES, 'UTF-8'); ?></div>
+            <div class="score">
+                <?php
+                    if (!empty($mostConsistent)) {
+                        echo number_format((float)($mostConsistent['consistency_index'] ?? 0), 1) . '%';
+                    } else {
+                        echo 'N/A';
+                    }
+                ?>
+            </div>
+        </div>
     </div>
 
     <div class="section-title">Insights</div>
@@ -1094,6 +1245,9 @@ label.check {
             <h3>Reward Distribution</h3>
             <div class="subtext">Rewarded mods <?php echo $rewardedCount; ?></div>
             <div class="subtext">Avg reward <?php echo number_format($avgReward, 2); ?></div>
+            <?php if ($bonusPool > 0): ?>
+                <div class="subtext">KPI bonus pool <?php echo number_format($bonusPool, 2); ?></div>
+            <?php endif; ?>
             <div class="subtext">Median <?php echo number_format($rewardMedian, 2); ?> · Max <?php echo number_format($rewardMax, 2); ?></div>
             <div class="subtext">Top 3 reward share <?php echo number_format($top3RewardShare, 1); ?>%</div>
         </div>
@@ -1122,6 +1276,12 @@ label.check {
                 <?php if ($minScoreRule > 0): ?>
                     <div class="subtext">Score under <?php echo $minScoreRule; ?>: <?php echo $eligibilityGaps['score']; ?></div>
                 <?php endif; ?>
+                <?php if ($minActionsRule > 0): ?>
+                    <div class="subtext">Below <?php echo $minActionsRule; ?> actions: <?php echo $eligibilityGaps['actions']; ?></div>
+                <?php endif; ?>
+                <?php if ($minActiveHoursRule > 0): ?>
+                    <div class="subtext">Below <?php echo number_format($minActiveHoursRule, 1); ?> hrs: <?php echo $eligibilityGaps['active_hours']; ?></div>
+                <?php endif; ?>
             <?php endif; ?>
         </div>
     </div>
@@ -1137,7 +1297,10 @@ label.check {
             <tr>
                 <th>#</th>
                 <th>Mod</th>
+                <th>Role</th>
                 <th>Score</th>
+                <th>Impact</th>
+                <th>Consist</th>
                 <?php if ($compact): ?>
                     <th>Actions</th>
                 <?php else: ?>
@@ -1152,6 +1315,7 @@ label.check {
                 <?php endif; ?>
                 <th>Days</th>
                 <th>Trend</th>
+                <th>Bonus</th>
                 <th>Eligible</th>
                 <th>Reward</th>
             </tr>
@@ -1169,6 +1333,16 @@ label.check {
                     $eligible = $eligibleMap[$mod['user_id']] ?? true;
                     $scorePercent = $topScore > 0 ? ($mod['score'] / $topScore) * 100 : 0;
                     $showUsername = !empty($mod['username']) && strpos((string)$mod['display_name'], '@') !== 0;
+                    $internalMessages = (int)($mod['internal_messages'] ?? 0);
+                    $externalMessages = (int)($mod['external_messages'] ?? 0);
+                    $messageTotal = $internalMessages + $externalMessages;
+                    $messageInternalShare = $messageTotal > 0 ? round(($internalMessages / $messageTotal) * 100, 1) : 0;
+                    $messageExternalShare = $messageTotal > 0 ? round(100 - $messageInternalShare, 1) : 0;
+                    $internalActive = (float)($mod['internal_active_minutes'] ?? 0);
+                    $externalActive = (float)($mod['external_active_minutes'] ?? 0);
+                    $activeTotal = $internalActive + $externalActive;
+                    $activeInternalShare = $activeTotal > 0 ? round(($internalActive / $activeTotal) * 100, 1) : 0;
+                    $activeExternalShare = $activeTotal > 0 ? round(100 - $activeInternalShare, 1) : 0;
                 ?>
                 <tr>
                     <td class="rank <?php echo $rank <= 3 ? 'rank-top' : ''; ?>">
@@ -1181,10 +1355,13 @@ label.check {
                             <div class="subtext">@<?php echo htmlspecialchars($mod['username'], ENT_QUOTES, 'UTF-8'); ?></div>
                         <?php endif; ?>
                     </td>
+                    <td><?php echo htmlspecialchars($mod['role'] !== '' ? $mod['role'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
                     <td>
                         <?php echo number_format($mod['score'], 2); ?>
                         <div class="bar"><span style="width: <?php echo number_format($scorePercent, 2); ?>%"></span></div>
                     </td>
+                    <td><?php echo number_format((float)($mod['impact_score'] ?? 0), 2); ?></td>
+                    <td><?php echo number_format((float)($mod['consistency_index'] ?? 0), 1); ?>%</td>
                     <?php if ($compact): ?>
                         <td><?php echo (int)$mod['actions']; ?></td>
                     <?php else: ?>
@@ -1195,13 +1372,21 @@ label.check {
                     <td>
                         <?php echo (int)$mod['messages']; ?>
                         <?php if ($showSources): ?>
-                            <div class="source-breakdown">Bot <?php echo (int)($mod['internal_messages'] ?? 0); ?> | Ext <?php echo (int)($mod['external_messages'] ?? 0); ?></div>
+                            <div class="source-breakdown">Bot <?php echo $internalMessages; ?> | External (CK/Combot) <?php echo $externalMessages; ?></div>
+                            <div class="mini-bar">
+                                <span class="internal" style="width: <?php echo number_format($messageInternalShare, 1); ?>%"></span>
+                                <span class="external" style="width: <?php echo number_format($messageExternalShare, 1); ?>%"></span>
+                            </div>
                         <?php endif; ?>
                     </td>
                     <td>
                         <?php echo number_format($mod['active_minutes'] / 60, 1); ?>h
                         <?php if ($showSources): ?>
-                            <div class="source-breakdown">Bot <?php echo number_format(($mod['internal_active_minutes'] ?? 0) / 60, 1); ?>h | Ext <?php echo number_format(($mod['external_active_minutes'] ?? 0) / 60, 1); ?>h</div>
+                            <div class="source-breakdown">Bot <?php echo number_format($internalActive / 60, 1); ?>h | External (CK/Combot) <?php echo number_format($externalActive / 60, 1); ?>h</div>
+                            <div class="mini-bar">
+                                <span class="internal" style="width: <?php echo number_format($activeInternalShare, 1); ?>%"></span>
+                                <span class="external" style="width: <?php echo number_format($activeExternalShare, 1); ?>%"></span>
+                            </div>
                         <?php endif; ?>
                     </td>
                     <?php if (!$compact): ?>
@@ -1213,12 +1398,19 @@ label.check {
                             if ($mod['improvement'] === null) {
                                 echo '<span class="trend trend-flat">N/A</span>';
                             } elseif ($mod['improvement'] >= 0) {
-                                echo '<span class="trend trend-up">Up ' . number_format($mod['improvement'], 1) . '%</span>';
+                                echo '<span class="trend trend-up">Up &uarr; ' . number_format($mod['improvement'], 1) . '%</span>';
                             } else {
-                                echo '<span class="trend trend-down">Down ' . number_format(abs($mod['improvement']), 1) . '%</span>';
+                                echo '<span class="trend trend-down">Down &darr; ' . number_format(abs($mod['improvement']), 1) . '%</span>';
+                            }
+                            $trend3m = $mod['trend_3m'] ?? null;
+                            $trend3mLabel = 'N/A';
+                            if ($trend3m !== null) {
+                                $trend3mLabel = ($trend3m >= 0 ? '+' : '') . number_format($trend3m, 1) . '%';
                             }
                         ?>
+                        <div class="subtext">3m <?php echo $trend3mLabel; ?></div>
                     </td>
+                    <td><?php echo number_format((float)($mod['bonus'] ?? 0), 2); ?></td>
                     <td>
                         <?php if ($eligible): ?>
                             <span class="pill good">Yes</span>

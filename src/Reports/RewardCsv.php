@@ -33,9 +33,11 @@ class RewardCsv
         $ranked = $this->rewards->rankAndReward($mods, $budget, $context);
 
         $rewardMap = [];
+        $bonusMap = [];
         $eligibleMap = [];
         foreach ($ranked as $item) {
             $rewardMap[$item['user_id']] = $item['reward'];
+            $bonusMap[$item['user_id']] = $item['bonus'] ?? 0.0;
             if (array_key_exists('eligible', $item)) {
                 $eligibleMap[$item['user_id']] = (bool)$item['eligible'];
             }
@@ -47,20 +49,25 @@ class RewardCsv
         $fp = fopen($file, 'w');
 
         fputcsv($fp, [
-            'Rank', 'Mod', 'Eligible', 'Score', 'Messages', 'Messages (Bot)', 'Messages (External)',
+            'Rank', 'Mod', 'Role', 'Eligible', 'Score', 'Impact Score', 'Consistency %',
+            'Messages', 'Messages (Bot)', 'Messages (External)',
             'Warnings', 'Mutes', 'Bans', 'Active Hours', 'Active Hours (External)',
-            'Membership Hours', 'Days Active', 'Improvement %', 'Reward'
+            'Membership Hours', 'Days Active', 'Improvement %', 'Trend 3M %', 'Bonus', 'Reward'
         ]);
 
         $rank = 1;
         foreach ($mods as $mod) {
             $reward = $rewardMap[$mod['user_id']] ?? 0.0;
+            $bonus = $bonusMap[$mod['user_id']] ?? 0.0;
             $eligible = $eligibleMap[$mod['user_id']] ?? null;
             fputcsv($fp, [
                 $rank,
                 $mod['display_name'],
+                $mod['role'] ?? '',
                 $eligible === null ? '' : ($eligible ? 'Yes' : 'No'),
                 number_format($mod['score'], 2, '.', ''),
+                number_format($mod['impact_score'] ?? 0, 2, '.', ''),
+                number_format($mod['consistency_index'] ?? 0, 1, '.', ''),
                 $mod['messages'],
                 $mod['internal_messages'] ?? $mod['messages'],
                 $mod['external_messages'] ?? 0,
@@ -72,6 +79,8 @@ class RewardCsv
                 number_format($mod['membership_minutes'] / 60, 1, '.', ''),
                 $mod['days_active'],
                 $mod['improvement'] !== null ? number_format($mod['improvement'], 1, '.', '') : '',
+                $mod['trend_3m'] !== null ? number_format($mod['trend_3m'], 1, '.', '') : '',
+                number_format($bonus, 2, '.', ''),
                 number_format($reward, 2, '.', ''),
             ]);
             $rank++;
