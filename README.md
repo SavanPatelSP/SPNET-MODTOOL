@@ -66,6 +66,7 @@ If you still get “no permission,” add your Telegram user id to `owner_user_i
 Private chat commands:
 - `/mychats` – list your group chat IDs
 - `/usechat <chat_id>` (or `/usechat <title>` or `/usechat off`)
+- `/guide` (full usage guide with examples)
 - `/stats [chat_id] [YYYY-MM] [@user]`
 - `/leaderboard [chat_id] [YYYY-MM] [budget]`
 - `/report [chat_id] [YYYY-MM] [budget]`

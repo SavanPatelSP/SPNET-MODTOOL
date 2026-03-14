@@ -194,7 +194,7 @@ class UpdateHandler
             'usechat', 'modadd', 'modremove', 'modlist',
             'plan', 'setplan', 'coach', 'health', 'trend', 'execsummary', 'archive',
             'rosteradd', 'rosterremove', 'rosterlist', 'rosterrole',
-            'premium', 'benefits', 'pricing',
+            'premium', 'benefits', 'pricing', 'guide',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
 
@@ -216,6 +216,11 @@ class UpdateHandler
 
             if ($command === 'usechat') {
                 $this->handleUseChat($chatId, $userId, $args);
+                return;
+            }
+
+            if ($command === 'guide') {
+                $this->handleGuide($chatId);
                 return;
             }
 
@@ -1797,6 +1802,7 @@ class UpdateHandler
                 'Tip: set a default chat with /usechat &lt;chat_id&gt; to skip chat ids.',
                 '/mychats - list your group chats',
                 '/usechat &lt;chat_id&gt; | /usechat &lt;title&gt; | /usechat off',
+                '/guide (full usage guide with examples)',
                 '/stats [chat_id] [YYYY-MM] [@user]',
                 '/leaderboard [chat_id] [YYYY-MM] [budget]',
                 '/report [chat_id] [YYYY-MM] [budget]',
@@ -1833,6 +1839,90 @@ class UpdateHandler
             'Moderation commands are disabled.',
             'Analytics commands are available in private chat with me.',
         ]);
+    }
+
+    private function handleGuide(int|string $chatId): void
+    {
+        foreach ($this->guideTextParts() as $part) {
+            $this->tg->sendMessage($chatId, $part, ['parse_mode' => 'HTML']);
+        }
+    }
+
+    private function guideTextParts(): array
+    {
+        $parts = [];
+
+        $parts[] = implode("\n", [
+            '<b>SP NET MOD TOOL – Usage Guide (1/3)</b>',
+            'All commands are used in <b>private chat</b> with the bot.',
+            '',
+            '<b>Step 1: Add bot to groups</b>',
+            '1) Add bot to the group',
+            '2) Make it admin or disable privacy mode in BotFather',
+            '3) Send any message in the group',
+            '',
+            '<b>Step 2: Pick a default chat</b>',
+            '<code>/mychats</code>',
+            '<code>/usechat &lt;chat_id&gt;</code>',
+            '',
+            '<b>Step 3: Add mods</b>',
+            '<code>/modadd @alex</code>',
+            '<code>/modadd 123456789</code>',
+            '<code>/modremove @alex</code>',
+            '<code>/modlist</code>',
+            '',
+            'Tip: Forward a user message here and reply <code>/modadd</code>.',
+        ]);
+
+        $parts[] = implode("\n", [
+            '<b>Usage Guide (2/3) – Stats + Rewards</b>',
+            '<b>Stats</b>',
+            '<code>/stats</code>',
+            '<code>/stats 2026-02</code>',
+            '<code>/stats @alex</code>',
+            '<code>/stats &lt;chat_id&gt; 2026-02 @alex</code>',
+            '',
+            '<b>Leaderboards</b>',
+            '<code>/leaderboard</code>',
+            '<code>/leaderboard 2026-02</code>',
+            '',
+            '<b>Reward sheets</b>',
+            '<code>/report 2026-02 5000</code>',
+            '<code>/reportcsv 2026-02 5000</code>',
+            '',
+            '<b>Mid-month progress</b>',
+            '<code>/progress</code>',
+            '<code>/progress 7500</code>',
+            '',
+            '<b>Multi-chat summary</b>',
+            '<code>/summary 2026-02 12000</code>',
+        ]);
+
+        $parts[] = implode("\n", [
+            '<b>Usage Guide (3/3) – Automation + Extras</b>',
+            '<b>Automation</b>',
+            '<code>/autoreport on 1 9</code>',
+            '<code>/autoprogress on 15 12</code>',
+            '',
+            '<b>Premium insights</b>',
+            '<code>/coach 2026-02</code>',
+            '<code>/health 2026-02</code>',
+            '<code>/trend 2026-02 5000</code>',
+            '<code>/execsummary 2026-02 5000</code>',
+            '',
+            '<b>Dashboard</b>',
+            'Open in browser:',
+            '<code>http://127.0.0.1:8000/dashboard.php?token=YOUR_TOKEN</code>',
+            '',
+            '<b>Imports</b>',
+            '<code>php bin/import-chatkeeper.php --file=/path/analysis_users.csv --chat=&lt;chat_id&gt; --month=2026-02</code>',
+            '<code>php bin/import-combot.php --file=/path/combot.csv --chat=&lt;chat_id&gt; --month=2026-02</code>',
+            '',
+            '<b>Troubleshooting</b>',
+            'If bot is silent: check DNS/network and ensure it can reach api.telegram.org.',
+        ]);
+
+        return $parts;
     }
 
     private function formatStatsMessage(array $stat, array $range): string
