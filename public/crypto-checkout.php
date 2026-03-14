@@ -52,6 +52,7 @@ $testMode = $payments->isTestMode();
 $status = $order['status'] ?? 'pending';
 $paid = $status === 'test_paid' || $status === 'paid' || $status === 'successful';
 $error = null;
+[$firstName, $lastName] = array_pad(explode(' ', (string)($order['payer_name'] ?? ''), 2), 2, '');
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $testMode && !$paid) {
     $payments->updateStatus($orderId, 'test_paid');
@@ -79,6 +80,7 @@ $txId = hash('sha256', $orderId . '|' . $createdAt);
 $title = $config['report']['brand_name'] ?? 'SP NET MOD TOOL';
 $displayAmount = number_format($amount, 2) . ' ' . htmlspecialchars($currency, ENT_QUOTES, 'UTF-8');
 $expiresAt = $expiryTs ? gmdate('Y-m-d H:i:s', $expiryTs) : '';
+$receiptId = strtoupper(substr(hash('sha1', $orderId . $address), 0, 10));
 
 ?><!DOCTYPE html>
 <html lang="en">
@@ -173,6 +175,9 @@ body {
     display: flex;
     gap: 12px;
     flex-wrap: wrap;
+}
+.actions.center {
+    justify-content: flex-start;
 }
 .btn {
     border: none;
@@ -269,6 +274,27 @@ body {
     </div>
 
     <div class="card">
+        <?php if ($paid): ?>
+            <div class="label">Payment Complete</div>
+            <div class="value large">Thank you for your purchase.</div>
+            <div class="note">Your transaction was confirmed and processed successfully.</div>
+            <div class="divider"></div>
+            <div class="grid">
+                <div>
+                    <div class="label">Receipt</div>
+                    <div class="value"><?php echo htmlspecialchars($receiptId, ENT_QUOTES, 'UTF-8'); ?></div>
+                </div>
+                <div>
+                    <div class="label">Amount Paid</div>
+                    <div class="value"><?php echo $displayAmount; ?></div>
+                </div>
+                <div>
+                    <div class="label">Status</div>
+                    <div class="value"><span class="pill good">Completed</span></div>
+                </div>
+            </div>
+            <div class="divider"></div>
+        <?php endif; ?>
         <div class="grid">
             <div>
                 <div class="label">Amount Due</div>
