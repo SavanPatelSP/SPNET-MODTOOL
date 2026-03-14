@@ -107,10 +107,13 @@ Adjust `polling` in `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php`
 
 ## Live Dashboard
 - Set `dashboard.token` in `config.local.php`
-- Open `/Users/savanpatel/Documents/SPNET-MODTOOL/public/dashboard.php?token=YOUR_TOKEN`
+- Start a local server:
+  - `php -S 127.0.0.1:8000 -t /Users/savanpatel/Documents/SPNET-MODTOOL/public`
+- Open `http://127.0.0.1:8000/dashboard.php?token=YOUR_TOKEN`
 - Optional: add `&chat_id=CHAT_ID&month=YYYY-MM`
 - Use “All Chats” for the multi-chat view
 - Export buttons call `/Users/savanpatel/Documents/SPNET-MODTOOL/public/export.php`
+- Filters: `search`, `min_messages`, `only_eligible`, and `refresh` (seconds)
 
 ## Google Sheets Export (optional)
 This uses a webhook URL from Google Apps Script. Set `google_sheets.webhook_url` in `config.local.php`.

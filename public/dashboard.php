@@ -31,7 +31,11 @@ $rewardService = new RewardService($config);
 $chatId = $_GET['chat_id'] ?? ($dashboardConfig['default_chat_id'] ?? null);
 $month = $_GET['month'] ?? null;
 $budgetOverride = isset($_GET['budget']) ? (float)$_GET['budget'] : null;
-$refresh = (int)($dashboardConfig['refresh_seconds'] ?? 60);
+$refresh = isset($_GET['refresh']) ? (int)$_GET['refresh'] : (int)($dashboardConfig['refresh_seconds'] ?? 0);
+$refresh = max(0, $refresh);
+$search = trim((string)($_GET['search'] ?? ''));
+$minMessages = isset($_GET['min_messages']) ? (int)$_GET['min_messages'] : 0;
+$onlyEligible = isset($_GET['only_eligible']);
 
 $chats = $db->fetchAll('SELECT id, title, type FROM chats ORDER BY title ASC');
 
@@ -77,7 +81,63 @@ $brand = $config['report']['brand_name'] ?? 'SP NET MOD TOOL';
 
 $summary = $bundle['summary'];
 $mods = $bundle['mods'];
-$topMods = array_slice($mods, 0, 3);
+
+foreach ($mods as &$mod) {
+    $mod['eligible'] = $eligibleMap[$mod['user_id']] ?? true;
+}
+unset($mod);
+
+usort($mods, fn($a, $b) => $b['score'] <=> $a['score']);
+
+$modsFiltered = array_values(array_filter($mods, function (array $mod) use ($search, $minMessages, $onlyEligible): bool {
+    if ($onlyEligible && empty($mod['eligible'])) {
+        return false;
+    }
+    if ($minMessages > 0 && (int)($mod['messages'] ?? 0) < $minMessages) {
+        return false;
+    }
+    if ($search !== '') {
+        $lower = function (string $value): string {
+            return function_exists('mb_strtolower') ? mb_strtolower($value) : strtolower($value);
+        };
+        $pos = function (string $haystack, string $needle) {
+            return function_exists('mb_strpos') ? mb_strpos($haystack, $needle) : strpos($haystack, $needle);
+        };
+        $needle = $lower($search);
+        $haystack = $lower(($mod['display_name'] ?? '') . ' ' . ($mod['username'] ?? ''));
+        if ($pos($haystack, $needle) === false) {
+            return false;
+        }
+    }
+    return true;
+}));
+
+$topMods = array_slice($modsFiltered, 0, 3);
+
+$eligibleCount = 0;
+foreach ($mods as $mod) {
+    if (!empty($mod['eligible'])) {
+        $eligibleCount++;
+    }
+}
+$eligibleRate = count($mods) > 0 ? round(($eligibleCount / count($mods)) * 100, 1) : 0;
+
+$mostImproved = null;
+$mostActions = null;
+$mostActive = null;
+foreach ($modsFiltered as $mod) {
+    if ($mod['improvement'] !== null) {
+        if ($mostImproved === null || $mod['improvement'] > $mostImproved['improvement']) {
+            $mostImproved = $mod;
+        }
+    }
+    if ($mostActions === null || ($mod['warnings'] + $mod['mutes'] + $mod['bans']) > ($mostActions['warnings'] + $mostActions['mutes'] + $mostActions['bans'])) {
+        $mostActions = $mod;
+    }
+    if ($mostActive === null || $mod['active_minutes'] > $mostActive['active_minutes']) {
+        $mostActive = $mod;
+    }
+}
 
 $totalMessages = (int)($summary['messages'] ?? 0);
 $externalMessages = (int)($summary['external_messages'] ?? 0);
@@ -95,7 +155,9 @@ for ($i = 0; $i < 12; $i++) {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<?php if ($refresh > 0): ?>
 <meta http-equiv="refresh" content="<?php echo htmlspecialchars((string)$refresh, ENT_QUOTES, 'UTF-8'); ?>" />
+<?php endif; ?>
 <title><?php echo htmlspecialchars($brand, ENT_QUOTES, 'UTF-8'); ?> Dashboard</title>
 <style>
 :root { --accent: <?php echo $accent; ?>; --secondary: <?php echo $secondary; ?>; }
@@ -196,6 +258,17 @@ select, input {
 .source-breakdown {
     margin-top: 6px;
     font-size: 11px;
+    color: #6b7280;
+}
+.trend {
+    font-weight: 600;
+}
+.trend-up { color: #16a34a; }
+.trend-down { color: #dc2626; }
+.trend-flat { color: #6b7280; }
+.filter-note {
+    margin-top: 10px;
+    font-size: 12px;
     color: #6b7280;
 }
 .summary {
@@ -324,6 +397,22 @@ select, input {
                     Budget (optional)
                     <input type="text" name="budget" value="<?php echo htmlspecialchars((string)($budgetOverride ?? ''), ENT_QUOTES, 'UTF-8'); ?>" />
                 </label>
+                <label>
+                    Search
+                    <input type="text" name="search" value="<?php echo htmlspecialchars((string)$search, ENT_QUOTES, 'UTF-8'); ?>" />
+                </label>
+                <label>
+                    Min Msgs
+                    <input type="text" name="min_messages" value="<?php echo htmlspecialchars((string)$minMessages, ENT_QUOTES, 'UTF-8'); ?>" />
+                </label>
+                <label>
+                    Refresh (sec)
+                    <input type="text" name="refresh" value="<?php echo htmlspecialchars((string)$refresh, ENT_QUOTES, 'UTF-8'); ?>" />
+                </label>
+                <label>
+                    Eligible only
+                    <input type="checkbox" name="only_eligible" value="1" <?php echo $onlyEligible ? 'checked' : ''; ?> />
+                </label>
                 <button type="submit">Update</button>
             </form>
             <div class="actions">
@@ -343,6 +432,48 @@ select, input {
                 <div class="source-breakdown">Msgs <?php echo (int)$mod['messages']; ?> | Active <?php echo number_format($mod['active_minutes'] / 60, 1); ?>h</div>
             </div>
         <?php endforeach; ?>
+    </div>
+
+    <div class="podium">
+        <div class="podium-card">
+            <h4>Most Improved</h4>
+            <div class="name"><?php echo htmlspecialchars($mostImproved['display_name'] ?? 'N/A', ENT_QUOTES, 'UTF-8'); ?></div>
+            <div class="score">
+                <?php
+                    if (!empty($mostImproved) && $mostImproved['improvement'] !== null) {
+                        echo 'Up ' . number_format($mostImproved['improvement'], 1) . '%';
+                    } else {
+                        echo 'N/A';
+                    }
+                ?>
+            </div>
+        </div>
+        <div class="podium-card">
+            <h4>Most Actions</h4>
+            <div class="name"><?php echo htmlspecialchars($mostActions['display_name'] ?? 'N/A', ENT_QUOTES, 'UTF-8'); ?></div>
+            <div class="score">
+                <?php
+                    if (!empty($mostActions)) {
+                        echo (int)(($mostActions['warnings'] ?? 0) + ($mostActions['mutes'] ?? 0) + ($mostActions['bans'] ?? 0)) . ' actions';
+                    } else {
+                        echo 'N/A';
+                    }
+                ?>
+            </div>
+        </div>
+        <div class="podium-card">
+            <h4>Most Active</h4>
+            <div class="name"><?php echo htmlspecialchars($mostActive['display_name'] ?? 'N/A', ENT_QUOTES, 'UTF-8'); ?></div>
+            <div class="score">
+                <?php
+                    if (!empty($mostActive)) {
+                        echo number_format(($mostActive['active_minutes'] ?? 0) / 60, 1) . 'h';
+                    } else {
+                        echo 'N/A';
+                    }
+                ?>
+            </div>
+        </div>
     </div>
 
     <div class="summary">
@@ -372,6 +503,15 @@ select, input {
             <h3>Budget</h3>
             <div class="value"><?php echo number_format($budget, 2); ?></div>
         </div>
+        <div class="card">
+            <h3>Avg Score</h3>
+            <div class="value"><?php echo number_format((float)($summary['avg_score'] ?? 0), 2); ?></div>
+        </div>
+    </div>
+
+    <div class="filter-note">
+        Showing <?php echo count($modsFiltered); ?> of <?php echo count($mods); ?> mods |
+        Eligible: <?php echo $eligibleCount; ?> (<?php echo number_format($eligibleRate, 1); ?>%)
     </div>
 
     <table class="table">
@@ -387,6 +527,7 @@ select, input {
             <th>Active</th>
             <th>Member</th>
             <th>Days</th>
+            <th>Trend</th>
             <th>Eligible</th>
             <th>Reward</th>
         </tr>
@@ -394,8 +535,8 @@ select, input {
         <tbody>
         <?php
         $rank = 1;
-        $topScore = $mods[0]['score'] ?? 1;
-        foreach ($mods as $mod):
+        $topScore = $modsFiltered[0]['score'] ?? 1;
+        foreach ($modsFiltered as $mod):
             $reward = $rewardMap[$mod['user_id']] ?? 0.0;
             $eligible = $eligibleMap[$mod['user_id']] ?? true;
             $scorePercent = $topScore > 0 ? ($mod['score'] / $topScore) * 100 : 0;
@@ -414,9 +555,23 @@ select, input {
             <td><?php echo (int)$mod['warnings']; ?></td>
             <td><?php echo (int)$mod['mutes']; ?></td>
             <td><?php echo (int)$mod['bans']; ?></td>
-            <td><?php echo number_format($mod['active_minutes'] / 60, 1); ?>h</td>
+            <td>
+                <?php echo number_format($mod['active_minutes'] / 60, 1); ?>h
+                <div class="source-breakdown">Bot <?php echo number_format(($mod['internal_active_minutes'] ?? 0) / 60, 1); ?>h | Ext <?php echo number_format(($mod['external_active_minutes'] ?? 0) / 60, 1); ?>h</div>
+            </td>
             <td><?php echo number_format($mod['membership_minutes'] / 60, 1); ?>h</td>
             <td><?php echo (int)$mod['days_active']; ?></td>
+            <td>
+                <?php
+                    if ($mod['improvement'] === null) {
+                        echo '<span class="trend trend-flat">N/A</span>';
+                    } elseif ($mod['improvement'] >= 0) {
+                        echo '<span class="trend trend-up">Up ' . number_format($mod['improvement'], 1) . '%</span>';
+                    } else {
+                        echo '<span class="trend trend-down">Down ' . number_format(abs($mod['improvement']), 1) . '%</span>';
+                    }
+                ?>
+            </td>
             <td><?php echo $eligible ? 'Yes' : 'No'; ?></td>
             <td><?php echo number_format($reward, 2); ?></td>
         </tr>
@@ -448,7 +603,10 @@ select, input {
 
     <div class="header" style="margin-top: 18px;">
         <div class="meta">Last refresh: <?php echo htmlspecialchars(gmdate('Y-m-d H:i:s'), ENT_QUOTES, 'UTF-8'); ?> UTC</div>
-        <div class="meta">Auto refresh: every <?php echo htmlspecialchars((string)$refresh, ENT_QUOTES, 'UTF-8'); ?>s</div>
+        <div class="meta">
+            Auto refresh:
+            <?php echo $refresh > 0 ? ('every ' . htmlspecialchars((string)$refresh, ENT_QUOTES, 'UTF-8') . 's') : 'off'; ?>
+        </div>
     </div>
 </div>
 </body>

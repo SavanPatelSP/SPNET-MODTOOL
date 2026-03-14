@@ -102,7 +102,7 @@ return [
     'dashboard' => [
         'token' => null,
         'default_chat_id' => null,
-        'refresh_seconds' => 60,
+        'refresh_seconds' => 0,
     ],
 
     // Google Sheets export (webhook-based; use Apps Script)
