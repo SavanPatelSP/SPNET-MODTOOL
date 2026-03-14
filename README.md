@@ -52,6 +52,8 @@ Private chat commands:
 - `/modremove [chat_id] <@username|user_id>`
 - `/modlist [chat_id]`
 
+Tip: You can forward a user’s message to the bot in private chat and reply with `/modadd` (or `/modremove`) to avoid hunting for the user id.
+
 Group chat commands:
 - `/warn <reason>` (reply)
 - `/mute <minutes> <reason>` (reply)

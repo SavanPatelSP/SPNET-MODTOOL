@@ -220,10 +220,10 @@ class UpdateHandler
                         $this->handleAutoReport($chatId, $targetChatId, $cleanArgs);
                         return;
                     case 'modadd':
-                        $this->handleModAddPrivate($chatId, $targetChatId, $cleanArgs);
+                        $this->handleModAddPrivate($chatId, $targetChatId, $cleanArgs, $message);
                         return;
                     case 'modremove':
-                        $this->handleModRemovePrivate($chatId, $targetChatId, $cleanArgs);
+                        $this->handleModRemovePrivate($chatId, $targetChatId, $cleanArgs, $message);
                         return;
                     case 'modlist':
                         $this->handleModListPrivate($chatId, $targetChatId);
@@ -491,11 +491,14 @@ class UpdateHandler
         }
     }
 
-    private function handleModAddPrivate(int|string $responseChatId, int|string $chatId, string $args): void
+    private function handleModAddPrivate(int|string $responseChatId, int|string $chatId, string $args, array $message): void
     {
         $target = $this->resolveTargetUser($args);
         if (!$target) {
-            $this->tg->sendMessage($responseChatId, 'Usage: /modadd [chat_id] &lt;@username|user_id&gt; (or set /usechat).', ['parse_mode' => 'HTML']);
+            $target = $this->resolveTargetUserFromMessage($message);
+        }
+        if (!$target) {
+            $this->tg->sendMessage($responseChatId, 'Usage: /modadd [chat_id] &lt;@username|user_id&gt; (or set /usechat). You can also forward a user\'s message here and reply /modadd.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -504,11 +507,14 @@ class UpdateHandler
         $this->tg->sendMessage($responseChatId, 'Mod added: ' . $this->displayName($target), ['parse_mode' => 'HTML']);
     }
 
-    private function handleModRemovePrivate(int|string $responseChatId, int|string $chatId, string $args): void
+    private function handleModRemovePrivate(int|string $responseChatId, int|string $chatId, string $args, array $message): void
     {
         $target = $this->resolveTargetUser($args);
         if (!$target) {
-            $this->tg->sendMessage($responseChatId, 'Usage: /modremove [chat_id] &lt;@username|user_id&gt; (or set /usechat).', ['parse_mode' => 'HTML']);
+            $target = $this->resolveTargetUserFromMessage($message);
+        }
+        if (!$target) {
+            $this->tg->sendMessage($responseChatId, 'Usage: /modremove [chat_id] &lt;@username|user_id&gt; (or set /usechat). You can also forward a user\'s message here and reply /modremove.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -622,6 +628,46 @@ class UpdateHandler
         }
 
         return null;
+    }
+
+    private function resolveTargetUserFromMessage(array $message): ?array
+    {
+        $user = null;
+
+        if (isset($message['reply_to_message'])) {
+            $reply = $message['reply_to_message'];
+            if (isset($reply['forward_from'])) {
+                $user = $reply['forward_from'];
+            } elseif (isset($reply['from'])) {
+                $user = $reply['from'];
+            }
+        }
+
+        if (!$user && isset($message['forward_from'])) {
+            $user = $message['forward_from'];
+        }
+
+        if (!$user && isset($message['entities']) && is_array($message['entities'])) {
+            foreach ($message['entities'] as $entity) {
+                if (($entity['type'] ?? '') === 'text_mention' && isset($entity['user'])) {
+                    $user = $entity['user'];
+                    break;
+                }
+            }
+        }
+
+        if (!$user || !isset($user['id'])) {
+            return null;
+        }
+
+        $this->upsertUser($user);
+
+        return [
+            'id' => (int)$user['id'],
+            'username' => $user['username'] ?? null,
+            'first_name' => $user['first_name'] ?? null,
+            'last_name' => $user['last_name'] ?? null,
+        ];
     }
 
     private function handleMyChats(int|string $responseChatId, int|string $userId): void
