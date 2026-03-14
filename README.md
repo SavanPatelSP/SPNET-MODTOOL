@@ -30,7 +30,7 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
    - `php /Users/savanpatel/Documents/SPNET-MODTOOL/bin/poll.php`
 
 ## Commands
-Analytics commands are handled in the bot’s private chat. Moderation commands stay in the group.
+Analytics commands are handled in the bot’s private chat. Moderation commands are disabled in this bot.
 Use `/mychats` in private chat to get chat IDs, then set a default with `/usechat`.
 If you still get “no permission,” add your Telegram user id to `owner_user_ids` in `config.local.php`.
 
@@ -55,12 +55,7 @@ Private chat commands:
 Tip: You can forward a user’s message to the bot in private chat and reply with `/modadd` (or `/modremove`) to avoid hunting for the user id.
 
 Group chat commands:
-- `/warn <reason>` (reply)
-- `/mute <minutes> <reason>` (reply)
-- `/ban <reason>` (reply)
-- `/unmute` (reply)
-- `/unban` (reply)
-- `/mod add` (reply)
+- Moderation commands are disabled.
 - `/mod remove` (reply)
 
 ## Notes

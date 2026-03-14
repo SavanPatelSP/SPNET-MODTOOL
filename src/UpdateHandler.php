@@ -157,7 +157,7 @@ class UpdateHandler
             'setbudget', 'settimezone', 'setactivity', 'autoreport', 'mychats',
             'usechat', 'modadd', 'modremove', 'modlist',
         ];
-        $groupCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
+        $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
 
         if ($isPrivate) {
             if (in_array($command, ['help', 'start'], true)) {
@@ -165,8 +165,8 @@ class UpdateHandler
                 return;
             }
 
-            if (in_array($command, $groupCommands, true)) {
-                $this->tg->sendMessage($chatId, 'This command must be used in the group chat.', ['parse_mode' => 'HTML']);
+            if (in_array($command, $moderationCommands, true)) {
+                $this->tg->sendMessage($chatId, 'Moderation commands are disabled in this bot. It only handles analytics and rewards.', ['parse_mode' => 'HTML']);
                 return;
             }
 
@@ -245,21 +245,9 @@ class UpdateHandler
             return;
         }
 
-        if ($command === 'mod') {
-            if (!$this->isAuthorized($chatId, $userId)) {
-            $this->tg->sendMessage($chatId, 'You do not have permission to manage mods.', ['parse_mode' => 'HTML']);
-                return;
-            }
-            $this->handleModCommand($chatId, $message, $args);
+        if (in_array($command, $moderationCommands, true)) {
+            $this->tg->sendMessage($chatId, 'Moderation commands are disabled in this bot. It only handles analytics and rewards.', ['parse_mode' => 'HTML']);
             return;
-        }
-
-        if (in_array($command, ['warn', 'mute', 'ban', 'unmute', 'unban'], true)) {
-            if (!$this->isAuthorized($chatId, $userId)) {
-            $this->tg->sendMessage($chatId, 'You do not have permission to use moderation commands.', ['parse_mode' => 'HTML']);
-                return;
-            }
-            $this->handleModerationCommand($chatId, $message, $command, $args);
         }
     }
 
@@ -1198,13 +1186,7 @@ class UpdateHandler
 
         return implode("\n", [
             '<b>SP NET MOD TOOL</b>',
-            'Moderation commands (group only):',
-            '/warn <reason> (reply)',
-            '/mute <minutes> <reason> (reply)',
-            '/ban <reason> (reply)',
-            '/unmute (reply)',
-            '/unban (reply)',
-            '/mod add|remove (reply)',
+            'Moderation commands are disabled.',
             'Analytics commands are available in private chat with me.',
         ]);
     }
