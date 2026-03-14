@@ -1844,7 +1844,16 @@ class UpdateHandler
     private function handleGuide(int|string $chatId): void
     {
         foreach ($this->guideTextParts() as $part) {
-            $this->tg->sendMessage($chatId, $part, ['parse_mode' => 'HTML']);
+            $resp = $this->tg->sendMessage($chatId, $part, ['parse_mode' => 'HTML']);
+            if (!($resp['ok'] ?? false)) {
+                $plain = strip_tags($part);
+                $plain = html_entity_decode($plain, ENT_QUOTES, 'UTF-8');
+                $this->tg->call('sendMessage', [
+                    'chat_id' => $chatId,
+                    'text' => $plain,
+                    'disable_web_page_preview' => true,
+                ]);
+            }
         }
     }
 
