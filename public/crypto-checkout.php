@@ -84,6 +84,7 @@ $receiptId = strtoupper(substr(hash('sha1', $orderId . $address), 0, 10));
 $receiptUrl = 'crypto-receipt.php?token=' . urlencode((string)$token) . '&order=' . urlencode((string)$orderId) . '&download=1';
 $qrPayload = $currency . ':' . $address . '?amount=' . number_format($amount, 6, '.', '') . '&network=' . $network;
 $qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' . urlencode($qrPayload);
+$walletUri = $qrPayload;
 
 ?><!DOCTYPE html>
 <html lang="en">
@@ -524,6 +525,7 @@ body.dark .email-row input {
                 </div>
 
                 <div class="actions">
+                    <a class="btn primary" href="<?php echo htmlspecialchars($walletUri, ENT_QUOTES, 'UTF-8'); ?>">Scan in Wallet</a>
                     <?php if ($testMode): ?>
                         <?php if (!$paid): ?>
                             <form method="post">
@@ -572,6 +574,9 @@ body.dark .email-row input {
                 <div class="value large"><?php echo $displayAmount; ?></div>
                 <div class="note">Checkout for chat <?php echo (int)($order['chat_id'] ?? 0); ?></div>
                 <div class="divider"></div>
+                <div class="row"><span class="muted">Tokens</span><span><?php echo number_format($amount, 2); ?> <?php echo htmlspecialchars($currency, ENT_QUOTES, 'UTF-8'); ?></span></div>
+                <div class="row"><span class="muted">Unit price</span><span>1 <?php echo htmlspecialchars($currency, ENT_QUOTES, 'UTF-8'); ?></span></div>
+                <div class="row"><span class="muted">Total tokens</span><span><?php echo number_format($amount, 2); ?> <?php echo htmlspecialchars($currency, ENT_QUOTES, 'UTF-8'); ?></span></div>
                 <div class="row"><span class="muted">Network fee (est.)</span><span>0.80 <?php echo htmlspecialchars($currency, ENT_QUOTES, 'UTF-8'); ?></span></div>
                 <div class="row"><span class="muted">Processing time</span><span>2–5 minutes</span></div>
                 <div class="row"><span class="muted">Receipt</span><span><?php echo htmlspecialchars($receiptId, ENT_QUOTES, 'UTF-8'); ?></span></div>
