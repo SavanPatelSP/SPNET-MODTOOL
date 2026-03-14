@@ -53,11 +53,15 @@ class Telegram
         $params = array_merge([
             'chat_id' => $chatId,
             'text' => $text,
-            'parse_mode' => 'HTML',
+            'parse_mode' => 'Markdown',
             'disable_web_page_preview' => true,
         ], $options);
 
-        return $this->call('sendMessage', $params);
+        $resp = $this->call('sendMessage', $params);
+        if (!($resp['ok'] ?? false)) {
+            Logger::error('sendMessage failed: ' . ($resp['description'] ?? 'unknown'));
+        }
+        return $resp;
     }
 
     public function sendDocument(int|string $chatId, string $filePath, string $caption = '', array $options = []): array
@@ -66,9 +70,14 @@ class Telegram
             'chat_id' => $chatId,
             'caption' => $caption,
             'document' => new \CURLFile($filePath),
+            'parse_mode' => 'Markdown',
         ], $options);
 
-        return $this->call('sendDocument', $params, true);
+        $resp = $this->call('sendDocument', $params, true);
+        if (!($resp['ok'] ?? false)) {
+            Logger::error('sendDocument failed: ' . ($resp['description'] ?? 'unknown'));
+        }
+        return $resp;
     }
 
     public function getChatMember(int|string $chatId, int|string $userId): array

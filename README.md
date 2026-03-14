@@ -20,29 +20,37 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
 3. Run the auto-report migration:
    - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/002_auto_reports.sql`
    - If you use MariaDB CLI: `mariadb -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/002_auto_reports.sql`
-4. Copy config overrides:
+4. Run the user settings migration:
+   - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/003_user_settings.sql`
+   - If you use MariaDB CLI: `mariadb -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/003_user_settings.sql`
+5. Copy config overrides:
    - `cp /Users/savanpatel/Documents/SPNET-MODTOOL/config.example.php /Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php`
-5. Edit `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` with your bot token and DB creds.
-6. Run in long-poll mode:
+6. Edit `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` with your bot token and DB creds.
+7. Run in long-poll mode:
    - `php /Users/savanpatel/Documents/SPNET-MODTOOL/bin/poll.php`
 
 ## Commands
 Analytics commands are handled in the bot’s private chat. Moderation commands stay in the group.
-Use `/mychats` in private chat to get the correct `<chat_id>`.
+Use `/mychats` in private chat to get chat IDs, then set a default with `/usechat`.
+If you still get “no permission,” add your Telegram user id to `owner_user_ids` in `config.local.php`.
 
 Private chat commands:
 - `/mychats` – list your group chat IDs
-- `/stats <chat_id> [YYYY-MM] [@user]`
-- `/leaderboard <chat_id> [YYYY-MM] [budget]`
-- `/report <chat_id> [YYYY-MM] [budget]`
-- `/reportcsv <chat_id> [YYYY-MM] [budget]`
-- `/exportgsheet <chat_id> [YYYY-MM] [budget]`
-- `/setbudget <amount> <chat_id>`
-- `/settimezone <Region/City> <chat_id>`
-- `/setactivity <gap_minutes> <floor_minutes> <chat_id>`
-- `/autoreport on [day] [hour] <chat_id>`
-- `/autoreport off <chat_id>`
-- `/autoreport status <chat_id>`
+- `/usechat <chat_id>` (or `/usechat <title>` or `/usechat off`)
+- `/stats [chat_id] [YYYY-MM] [@user]`
+- `/leaderboard [chat_id] [YYYY-MM] [budget]`
+- `/report [chat_id] [YYYY-MM] [budget]`
+- `/reportcsv [chat_id] [YYYY-MM] [budget]`
+- `/exportgsheet [chat_id] [YYYY-MM] [budget]`
+- `/setbudget <amount> [chat_id]`
+- `/settimezone <Region/City> [chat_id]`
+- `/setactivity <gap_minutes> <floor_minutes> [chat_id]`
+- `/autoreport on [day] [hour] [chat_id]`
+- `/autoreport off [chat_id]`
+- `/autoreport status [chat_id]`
+- `/modadd [chat_id] <@username|user_id>`
+- `/modremove [chat_id] <@username|user_id>`
+- `/modlist [chat_id]`
 
 Group chat commands:
 - `/warn <reason>` (reply)
@@ -60,6 +68,25 @@ Group chat commands:
 
 ## Webhook (optional)
 You can use `/Users/savanpatel/Documents/SPNET-MODTOOL/public/webhook.php` as your Telegram webhook handler.
+
+## Make It Live (launchd on macOS)
+1. Copy the launchd plists:
+   - `cp /Users/savanpatel/Documents/SPNET-MODTOOL/ops/launchd/com.spnet.modtool.bot.plist ~/Library/LaunchAgents/`
+   - `cp /Users/savanpatel/Documents/SPNET-MODTOOL/ops/launchd/com.spnet.modtool.scheduler.plist ~/Library/LaunchAgents/`
+2. Load them:
+   - `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.spnet.modtool.bot.plist`
+   - `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.spnet.modtool.scheduler.plist`
+3. Check logs:
+   - `/Users/savanpatel/Documents/SPNET-MODTOOL/storage/logs/poll.out.log`
+   - `/Users/savanpatel/Documents/SPNET-MODTOOL/storage/logs/poll.err.log`
+   - `/Users/savanpatel/Documents/SPNET-MODTOOL/storage/logs/scheduler.out.log`
+   - `/Users/savanpatel/Documents/SPNET-MODTOOL/storage/logs/scheduler.err.log`
+
+## Polling Speed
+Adjust `polling` in `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` to control speed:
+- `timeout_seconds` (long-poll timeout)
+- `limit` (max updates per request)
+- `sleep_ms` (pause between loops)
 
 ## Live Dashboard
 - Set `dashboard.token` in `config.local.php`

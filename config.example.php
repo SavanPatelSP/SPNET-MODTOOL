@@ -13,6 +13,9 @@ return [
     // Use Telegram admin status for permission checks
     'use_telegram_admins' => true,
 
+    // Optional: always-allowed user IDs (comma-separated via OWNER_USER_IDS env)
+    'owner_user_ids' => [],
+
     // Database settings
     'db' => [
         'dsn' => 'mysql:host=127.0.0.1;dbname=telegram_mods;charset=utf8mb4',
@@ -48,6 +51,15 @@ return [
             3 => 1.05,
         ],
         'min_reward' => 0.00,
+    ],
+
+    // Polling speed (long-poll)
+    'polling' => [
+        'timeout_seconds' => 10,
+        'limit' => 50,
+        'sleep_ms' => 0,
+        'error_sleep_ms' => 1000,
+        'allowed_updates' => ['message', 'chat_member'],
     ],
 
     // Auto report defaults (used when chat settings are first created)
