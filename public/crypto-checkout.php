@@ -77,6 +77,8 @@ $expired = $expiryTs !== false && time() > $expiryTs;
 $txId = hash('sha256', $orderId . '|' . $createdAt);
 
 $title = $config['report']['brand_name'] ?? 'SP NET MOD TOOL';
+$displayAmount = number_format($amount, 2) . ' ' . htmlspecialchars($currency, ENT_QUOTES, 'UTF-8');
+$expiresAt = $expiryTs ? gmdate('Y-m-d H:i:s', $expiryTs) : '';
 
 ?><!DOCTYPE html>
 <html lang="en">
@@ -105,6 +107,18 @@ body {
 }
 .header h1 { margin: 0; font-size: 22px; }
 .header .meta { font-size: 12px; color: #cbd5f5; margin-top: 6px; }
+.header .brand {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+.brand-badge {
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: #94a3b8;
+}
 .card {
     background: #fff;
     border-radius: 16px;
@@ -129,6 +143,9 @@ body {
     font-weight: 700;
     margin-top: 6px;
 }
+.value.large {
+    font-size: 22px;
+}
 .pill {
     display: inline-flex;
     align-items: center;
@@ -141,6 +158,7 @@ body {
 }
 .pill.good { background: #dcfce7; color: #166534; }
 .pill.warn { background: #fee2e2; color: #991b1b; }
+.pill.info { background: #dbeafe; color: #1d4ed8; }
 .address {
     background: #0f172a;
     color: #f8fafc;
@@ -166,18 +184,87 @@ body {
 }
 .btn.primary { background: #ff7a59; color: #fff; }
 .btn.ghost { background: #e2e8f0; color: #0f172a; }
+.btn.dark { background: #0f172a; color: #fff; }
 .note {
     margin-top: 10px;
     font-size: 12px;
     color: #64748b;
 }
 .divider { height: 1px; background: #eef2f7; margin: 16px 0; }
+.steps {
+    display: grid;
+    gap: 10px;
+    margin-top: 12px;
+}
+.step {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    font-size: 13px;
+    color: #334155;
+}
+.step .dot {
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    background: #e2e8f0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 12px;
+    color: #0f172a;
+}
+.qr {
+    width: 140px;
+    height: 140px;
+    background: repeating-linear-gradient(0deg, #0f172a, #0f172a 6px, #fff 6px, #fff 12px),
+                repeating-linear-gradient(90deg, #0f172a, #0f172a 6px, #fff 6px, #fff 12px);
+    border: 8px solid #fff;
+    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.15);
+    border-radius: 14px;
+}
+.qr-wrap {
+    display: flex;
+    gap: 18px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.timer {
+    font-weight: 700;
+    color: #b45309;
+}
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: #f1f5f9;
+    color: #0f172a;
+    font-size: 11px;
+    font-weight: 700;
+}
+.row {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 13px;
+    color: #334155;
+}
+.muted { color: #64748b; }
 </style>
 </head>
 <body>
 <div class="container">
     <div class="header">
-        <h1>Crypto Checkout (Sandbox)</h1>
+        <div class="brand">
+            <div>
+                <div class="brand-badge">SANDBOX</div>
+                <h1>Crypto Checkout</h1>
+            </div>
+            <div class="chip">Powered by SP NET MOD TOOL</div>
+        </div>
         <div class="meta">Order #<?php echo (int)$orderId; ?> · Created <?php echo htmlspecialchars($createdAt, ENT_QUOTES, 'UTF-8'); ?> UTC</div>
     </div>
 
@@ -185,7 +272,7 @@ body {
         <div class="grid">
             <div>
                 <div class="label">Amount Due</div>
-                <div class="value"><?php echo number_format($amount, 2); ?> <?php echo htmlspecialchars($currency, ENT_QUOTES, 'UTF-8'); ?></div>
+                <div class="value large"><?php echo $displayAmount; ?></div>
                 <div class="note">Network fee not included · Test mode only</div>
             </div>
             <div>
@@ -199,15 +286,21 @@ body {
                     <?php if ($paid): ?>
                         <span class="pill good">Paid (Sandbox)</span>
                     <?php else: ?>
-                        <span class="pill <?php echo $expired ? 'warn' : ''; ?>"><?php echo $expired ? 'Expired' : 'Awaiting Payment'; ?></span>
+                        <span class="pill <?php echo $expired ? 'warn' : 'info'; ?>"><?php echo $expired ? 'Expired' : 'Awaiting Payment'; ?></span>
                     <?php endif; ?>
                 </div>
             </div>
         </div>
         <div class="divider"></div>
-        <div class="label">Deposit Address</div>
-        <div class="address"><?php echo htmlspecialchars($address, ENT_QUOTES, 'UTF-8'); ?></div>
-        <div class="note">Send exactly the amount to this address in the sandbox.</div>
+        <div class="qr-wrap">
+            <div class="qr" aria-hidden="true"></div>
+            <div>
+                <div class="label">Deposit Address</div>
+                <div class="address"><?php echo htmlspecialchars($address, ENT_QUOTES, 'UTF-8'); ?></div>
+                <div class="note">Send exactly <?php echo $displayAmount; ?> to this address.</div>
+                <div class="note">Expires in: <span class="timer" id="timer">--:--</span> · Expires at <?php echo htmlspecialchars($expiresAt, ENT_QUOTES, 'UTF-8'); ?> UTC</div>
+            </div>
+        </div>
 
         <div class="actions">
             <?php if ($testMode): ?>
@@ -218,9 +311,45 @@ body {
                 <?php endif; ?>
                 <a class="btn ghost" href="<?php echo htmlspecialchars($_SERVER['REQUEST_URI'], ENT_QUOTES, 'UTF-8'); ?>">Refresh</a>
             <?php endif; ?>
+            <button class="btn dark" type="button" onclick="copyValue('<?php echo htmlspecialchars($address, ENT_QUOTES, 'UTF-8'); ?>')">Copy Address</button>
+            <button class="btn ghost" type="button" onclick="copyValue('<?php echo $displayAmount; ?>')">Copy Amount</button>
         </div>
         <div class="note">Transaction ID (fake): <?php echo substr($txId, 0, 16); ?>…</div>
     </div>
+
+    <div class="card">
+        <div class="label">Payment Steps</div>
+        <div class="steps">
+            <div class="step"><span class="dot">1</span><span>Copy the address and send the exact amount on <strong><?php echo htmlspecialchars($network, ENT_QUOTES, 'UTF-8'); ?></strong>.</span></div>
+            <div class="step"><span class="dot">2</span><span>Wait for confirmations (sandbox simulates this instantly).</span></div>
+            <div class="step"><span class="dot">3</span><span>Plan is applied automatically after payment confirmation.</span></div>
+        </div>
+        <div class="divider"></div>
+        <div class="row"><span class="muted">Confirmations required</span><span>3 (sandbox)</span></div>
+        <div class="row"><span class="muted">Estimated arrival</span><span>~2–5 min</span></div>
+        <div class="row"><span class="muted">Order status</span><span><?php echo htmlspecialchars(strtoupper($status), ENT_QUOTES, 'UTF-8'); ?></span></div>
+    </div>
 </div>
+<script>
+function copyValue(value) {
+    if (!navigator.clipboard) {
+        return;
+    }
+    navigator.clipboard.writeText(value);
+}
+(function () {
+    var expiry = <?php echo $expiryTs ? (int)$expiryTs : 0; ?> * 1000;
+    var timer = document.getElementById('timer');
+    if (!timer || !expiry) return;
+    function tick() {
+        var diff = Math.max(0, expiry - Date.now());
+        var m = Math.floor(diff / 60000);
+        var s = Math.floor((diff % 60000) / 1000);
+        timer.textContent = String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+    }
+    tick();
+    setInterval(tick, 1000);
+})();
+</script>
 </body>
 </html>
