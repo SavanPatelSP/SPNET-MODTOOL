@@ -4,25 +4,35 @@ namespace App\Reports;
 
 use App\Services\StatsService;
 use App\Services\RewardService;
+use App\Services\RewardContextService;
+use App\Services\RewardHistoryService;
+use App\Services\ArchiveService;
 
 class RewardSheet
 {
     private StatsService $stats;
     private RewardService $rewards;
     private array $config;
+    private ?RewardContextService $contextService;
+    private ?RewardHistoryService $history;
+    private ?ArchiveService $archive;
 
-    public function __construct(StatsService $stats, RewardService $rewards, array $config)
+    public function __construct(StatsService $stats, RewardService $rewards, array $config, ?RewardContextService $contextService = null, ?RewardHistoryService $history = null, ?ArchiveService $archive = null)
     {
         $this->stats = $stats;
         $this->rewards = $rewards;
         $this->config = $config;
+        $this->contextService = $contextService;
+        $this->history = $history;
+        $this->archive = $archive;
     }
 
     public function generate(int|string $chatId, ?string $month, float $budget, ?array $bundle = null, ?string $suffix = null): string
     {
         $bundle = $bundle ?? $this->stats->getMonthlyStats($chatId, $month);
         $mods = $bundle['mods'];
-        $ranked = $this->rewards->rankAndReward($mods, $budget);
+        $context = $this->contextService ? $this->contextService->build($chatId, $bundle['range']['month']) : [];
+        $ranked = $this->rewards->rankAndReward($mods, $budget, $context);
 
         $rewardMap = [];
         $eligibilityMap = [];
@@ -66,7 +76,16 @@ class RewardSheet
         $fileSuffix = $suffix ?? $safeMonth;
         $file = __DIR__ . '/../../storage/reports/reward-sheet-' . $chatId . '-' . $fileSuffix . '.html';
         file_put_contents($file, $html);
-        return realpath($file) ?: $file;
+        $path = realpath($file) ?: $file;
+
+        if ($this->history) {
+            $this->history->record($chatId, $bundle['range']['month'], $ranked);
+        }
+        if ($this->archive) {
+            $this->archive->record((int)$chatId, 'reward_sheet', $bundle['range']['month'], $path);
+        }
+
+        return $path;
     }
 
     private function buildInsights(array $mods): array

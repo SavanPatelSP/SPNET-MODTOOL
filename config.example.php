@@ -68,6 +68,29 @@ return [
         'min_reward' => 0.00,
     ],
 
+    // Premium feature defaults
+    'premium' => [
+        'enabled' => true,
+        'default_plan' => 'free',
+        'reward' => [
+            'max_share' => 0.35,
+            'stability_months' => 3,
+            'stability_bonus' => 0.10,
+            'penalty_weight' => 0.20,
+            'penalty_decay' => 0.50,
+        ],
+        'health' => [
+            'workload_share_alert' => 0.45,
+            'burnout_multiplier' => 1.8,
+            'inactive_days_alert' => 7,
+        ],
+        'notifications' => [
+            'owner_dm' => true,
+            'mid_month_alert' => true,
+            'congrats' => true,
+        ],
+    ],
+
     // Polling speed (long-poll)
     'polling' => [
         'timeout_seconds' => 10,

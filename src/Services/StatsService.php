@@ -284,6 +284,10 @@ class StatsService
         foreach ($mods as $mod) {
             $userId = (int)$mod['user_id'];
             $timestamps = $messagesByUser[$userId] ?? [];
+            $lastActiveAt = null;
+            if (!empty($timestamps)) {
+                $lastActiveAt = gmdate('Y-m-d H:i:s', max($timestamps));
+            }
 
             $internalMessageCount = count($timestamps);
             $externalMessageCount = (int)($externalStats[$userId]['messages'] ?? 0);
@@ -334,6 +338,7 @@ class StatsService
                 'membership_minutes' => $membershipMinutes,
                 'days_active' => $daysActive,
                 'peak_hour' => $peakHour,
+                'last_active_at' => $lastActiveAt,
                 'score' => $score,
             ];
         }
@@ -341,6 +346,34 @@ class StatsService
         usort($stats, fn($a, $b) => $b['score'] <=> $a['score']);
 
         return $stats;
+    }
+
+    public function getHourlyCoverage(int|string $chatId, array $range, string $timezone, ?array $modIds = null): array
+    {
+        $hours = array_fill(0, 24, 0);
+        if ($modIds === null) {
+            $mods = $this->getMods($chatId);
+            $modIds = array_map(fn($mod) => (int)$mod['user_id'], $mods);
+        }
+        if (empty($modIds)) {
+            return $hours;
+        }
+
+        $modPlaceholders = implode(',', array_fill(0, count($modIds), '?'));
+        $rows = $this->db->fetchAll(
+            'SELECT sent_at FROM messages WHERE chat_id = ? AND sent_at >= ? AND sent_at < ? AND user_id IN (' . $modPlaceholders . ')',
+            array_merge([$chatId, $range['start_utc'], $range['end_utc']], $modIds)
+        );
+
+        $tz = new DateTimeZone($timezone);
+        foreach ($rows as $row) {
+            $dt = new DateTimeImmutable($row['sent_at'], new DateTimeZone('UTC'));
+            $dt = $dt->setTimezone($tz);
+            $hour = (int)$dt->format('G');
+            $hours[$hour]++;
+        }
+
+        return $hours;
     }
 
     private function getExternalStatsMap(int|string $chatId, string $month): array

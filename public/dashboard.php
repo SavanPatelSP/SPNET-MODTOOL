@@ -6,6 +6,7 @@ use App\Database;
 use App\Services\SettingsService;
 use App\Services\StatsService;
 use App\Services\RewardService;
+use App\Services\RewardContextService;
 
 $dashboardConfig = $config['dashboard'] ?? [];
 $token = $dashboardConfig['token'] ?? null;
@@ -27,6 +28,7 @@ $db = new Database($config['db']);
 $settingsService = new SettingsService($db, $config);
 $statsService = new StatsService($db, $settingsService, $config);
 $rewardService = new RewardService($config);
+$rewardContext = new RewardContextService($db, $config);
 
 $chatId = $_GET['chat_id'] ?? ($dashboardConfig['default_chat_id'] ?? null);
 $month = $_GET['month'] ?? null;
@@ -71,12 +73,15 @@ foreach ($chats as $chat) {
 if ($isAll) {
     $bundle = $statsService->getMonthlyStatsForChats($chatIds, $month);
     $budget = $budgetOverride ?? 0.0;
+    $context = ['premium' => false];
 } else {
     $bundle = $statsService->getMonthlyStats($chatId, $month);
     $budget = $budgetOverride ?? (float)($bundle['settings']['reward_budget'] ?? 0);
+    $context = $rewardContext->build($chatId, $bundle['range']['month']);
 }
 
-$ranked = $rewardService->rankAndReward($bundle['mods'], $budget);
+$ranked = $rewardService->rankAndReward($bundle['mods'], $budget, $context);
+$premium = (bool)($context['premium'] ?? false);
 
 $rewardMap = [];
 $eligibleMap = [];
@@ -395,7 +400,15 @@ if ($budgetOverride !== null) {
 }
 $htmlExportUrl = 'export.php?' . http_build_query(array_merge(['type' => 'html'], $exportBase));
 $csvExportUrl = 'export.php?' . http_build_query(array_merge(['type' => 'csv'], $exportBase));
+$pdfExportUrl = 'export.php?' . http_build_query(array_merge(['type' => 'pdf'], $exportBase));
+$execExportUrl = 'export.php?' . http_build_query(array_merge(['type' => 'executive'], $exportBase));
+$trendExportUrl = 'export.php?' . http_build_query(array_merge(['type' => 'trend'], $exportBase));
 $summaryExportUrl = 'export.php?' . http_build_query(array_merge(['type' => 'summary', 'token' => $token, 'month' => $bundle['range']['month'] ?? ''], $budgetOverride !== null ? ['budget' => $budgetOverride] : []));
+$importUrl = 'import.php?' . http_build_query([
+    'token' => $token,
+    'chat_id' => $chatId,
+    'month' => $bundle['range']['month'] ?? '',
+]);
 
 $colCount = $compact ? 10 : 13;
 
@@ -840,12 +853,21 @@ label.check {
                 <span class="chip">Actions <?php echo $totalActions; ?></span>
                 <span class="chip">Eligible <?php echo $eligibleCount; ?>/<?php echo count($mods); ?></span>
                 <span class="chip">Ext Share <?php echo number_format($externalShare, 1); ?>%</span>
+                <?php if (!$isAll): ?>
+                    <span class="chip"><?php echo $premium ? 'Premium' : 'Free'; ?> Plan</span>
+                <?php endif; ?>
             </div>
         </div>
         <div class="hero-actions">
             <div class="action-buttons">
                 <a class="button primary" href="<?php echo htmlspecialchars($htmlExportUrl, ENT_QUOTES, 'UTF-8'); ?>">Reward Sheet (HTML)</a>
                 <a class="button secondary" href="<?php echo htmlspecialchars($csvExportUrl, ENT_QUOTES, 'UTF-8'); ?>">Reward Sheet (CSV)</a>
+                <?php if ($premium): ?>
+                    <a class="button secondary" href="<?php echo htmlspecialchars($pdfExportUrl, ENT_QUOTES, 'UTF-8'); ?>">Reward Sheet (PDF)</a>
+                    <a class="button ghost" href="<?php echo htmlspecialchars($execExportUrl, ENT_QUOTES, 'UTF-8'); ?>">Executive Summary</a>
+                    <a class="button ghost" href="<?php echo htmlspecialchars($trendExportUrl, ENT_QUOTES, 'UTF-8'); ?>">Trend Report</a>
+                    <a class="button ghost" href="<?php echo htmlspecialchars($importUrl, ENT_QUOTES, 'UTF-8'); ?>">Import Wizard</a>
+                <?php endif; ?>
                 <a class="button ghost" href="<?php echo htmlspecialchars($summaryExportUrl, ENT_QUOTES, 'UTF-8'); ?>">Multi-Chat Summary</a>
             </div>
             <div class="hint">Exports use the selected chat and month. Filters only change the leaderboard view.</div>

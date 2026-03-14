@@ -7,9 +7,18 @@ use App\Services\StatsService;
 use App\Services\RewardService;
 use App\Services\GoogleSheetsService;
 use App\Services\UserSettingsService;
+use App\Services\SubscriptionService;
+use App\Services\RewardContextService;
+use App\Services\RewardHistoryService;
+use App\Services\CoachingService;
+use App\Services\HealthService;
+use App\Services\RosterService;
+use App\Services\ArchiveService;
 use App\Reports\RewardSheet;
 use App\Reports\RewardCsv;
 use App\Reports\MultiChatReport;
+use App\Reports\ExecutiveSummary;
+use App\Reports\TrendReport;
 use App\Logger;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -21,11 +30,20 @@ class UpdateHandler
     private array $config;
     private SettingsService $settings;
     private UserSettingsService $userSettings;
+    private SubscriptionService $subscriptions;
     private StatsService $stats;
     private RewardService $rewards;
+    private RewardContextService $rewardContext;
+    private RewardHistoryService $rewardHistory;
+    private CoachingService $coaching;
+    private HealthService $health;
+    private RosterService $roster;
+    private ArchiveService $archive;
     private RewardSheet $rewardSheet;
     private RewardCsv $rewardCsv;
     private MultiChatReport $multiChatReport;
+    private ExecutiveSummary $executiveSummary;
+    private TrendReport $trendReport;
     private GoogleSheetsService $googleSheets;
 
     public function __construct(Database $db, Telegram $tg, array $config)
@@ -35,11 +53,20 @@ class UpdateHandler
         $this->config = $config;
         $this->settings = new SettingsService($db, $config);
         $this->userSettings = new UserSettingsService($db);
+        $this->subscriptions = new SubscriptionService($db, $config);
         $this->stats = new StatsService($db, $this->settings, $config);
         $this->rewards = new RewardService($config);
-        $this->rewardSheet = new RewardSheet($this->stats, $this->rewards, $config);
-        $this->rewardCsv = new RewardCsv($this->stats, $this->rewards);
+        $this->rewardContext = new RewardContextService($db, $config);
+        $this->rewardHistory = new RewardHistoryService($db);
+        $this->archive = new ArchiveService($db);
+        $this->coaching = new CoachingService($this->stats, $this->settings, $config);
+        $this->health = new HealthService($this->stats, $this->settings, $config);
+        $this->roster = new RosterService($db);
+        $this->rewardSheet = new RewardSheet($this->stats, $this->rewards, $config, $this->rewardContext, $this->rewardHistory, $this->archive);
+        $this->rewardCsv = new RewardCsv($this->stats, $this->rewards, $this->rewardContext, $this->rewardHistory, $this->archive);
         $this->multiChatReport = new MultiChatReport($this->stats, $this->rewards, $config);
+        $this->executiveSummary = new ExecutiveSummary($this->stats, $this->rewards, $config, $this->rewardContext, $this->archive);
+        $this->trendReport = new TrendReport($this->stats, $this->rewards, $config, $this->rewardContext, $this->archive);
         $this->googleSheets = new GoogleSheetsService($config);
     }
 
@@ -159,6 +186,8 @@ class UpdateHandler
             'stats', 'leaderboard', 'report', 'reportcsv', 'exportgsheet', 'summary',
             'setbudget', 'settimezone', 'setactivity', 'autoreport', 'autoprogress', 'progress', 'mychats',
             'usechat', 'modadd', 'modremove', 'modlist',
+            'plan', 'setplan', 'coach', 'health', 'trend', 'execsummary', 'archive',
+            'rosteradd', 'rosterremove', 'rosterlist', 'rosterrole',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
 
@@ -239,6 +268,39 @@ class UpdateHandler
                         return;
                     case 'modlist':
                         $this->handleModListPrivate($chatId, $targetChatId);
+                        return;
+                    case 'plan':
+                        $this->handlePlan($chatId, $targetChatId);
+                        return;
+                    case 'setplan':
+                        $this->handleSetPlan($chatId, $targetChatId, $cleanArgs, $userId);
+                        return;
+                    case 'coach':
+                        $this->handleCoach($chatId, $targetChatId, $cleanArgs);
+                        return;
+                    case 'health':
+                        $this->handleHealth($chatId, $targetChatId, $cleanArgs);
+                        return;
+                    case 'trend':
+                        $this->handleTrendReport($chatId, $targetChatId, $cleanArgs);
+                        return;
+                    case 'execsummary':
+                        $this->handleExecutiveSummary($chatId, $targetChatId, $cleanArgs);
+                        return;
+                    case 'archive':
+                        $this->handleArchive($chatId, $targetChatId);
+                        return;
+                    case 'rosteradd':
+                        $this->handleRosterAdd($chatId, $targetChatId, $cleanArgs, $message);
+                        return;
+                    case 'rosterremove':
+                        $this->handleRosterRemove($chatId, $targetChatId, $cleanArgs, $message);
+                        return;
+                    case 'rosterlist':
+                        $this->handleRosterList($chatId, $targetChatId);
+                        return;
+                    case 'rosterrole':
+                        $this->handleRosterRole($chatId, $targetChatId, $cleanArgs, $message);
                         return;
                 }
             }
@@ -345,7 +407,8 @@ class UpdateHandler
             $budget = (float)$stats['settings']['reward_budget'];
         }
 
-        $ranked = $this->rewards->rankAndReward($stats['mods'], $budget);
+        $context = $this->rewardContext->build($chatId, $stats['range']['month']);
+        $ranked = $this->rewards->rankAndReward($stats['mods'], $budget, $context);
         $text = $this->formatLeaderboardMessage($ranked, $stats['range'], $budget);
         $this->tg->sendMessage($responseChatId, $text, ['parse_mode' => 'HTML']);
     }
@@ -589,6 +652,278 @@ class UpdateHandler
             $lines[] = $mod['id'] . ' | ' . $this->displayName($mod);
         }
         $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+    }
+
+    private function handlePlan(int|string $responseChatId, int|string $chatId): void
+    {
+        $sub = $this->subscriptions->get($chatId);
+        $plan = strtoupper($sub['plan'] ?? 'FREE');
+        $status = $sub['status'] ?? 'active';
+        $expires = $sub['expires_at'] ?? null;
+        $lines = [
+            '<b>Subscription Plan</b>',
+            'Plan: ' . $this->escape($plan),
+            'Status: ' . $this->escape($status),
+            'Expires: ' . ($expires ? $this->escape($expires) : 'never'),
+            'Tip: owners can upgrade with /setplan premium 30',
+        ];
+        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+    }
+
+    private function handleSetPlan(int|string $responseChatId, int|string $chatId, string $args, int|string $userId): void
+    {
+        if (!$this->isOwner($userId)) {
+            $this->tg->sendMessage($responseChatId, 'Only bot owners can set subscription plans.', ['parse_mode' => 'HTML']);
+            return;
+        }
+        $parts = preg_split('/\\s+/', trim($args));
+        $plan = $parts[0] ?? '';
+        $days = isset($parts[1]) && is_numeric($parts[1]) ? (int)$parts[1] : null;
+        if ($plan === '') {
+            $this->tg->sendMessage($responseChatId, 'Usage: /setplan &lt;free|premium&gt; [days]', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $sub = $this->subscriptions->setPlan($chatId, $plan, $days);
+        $msg = 'Plan updated: ' . strtoupper($sub['plan']) . '.';
+        if (!empty($sub['expires_at'])) {
+            $msg .= ' Expires ' . $sub['expires_at'] . '.';
+        }
+        $this->tg->sendMessage($responseChatId, $msg, ['parse_mode' => 'HTML']);
+    }
+
+    private function handleCoach(int|string $responseChatId, int|string $chatId, string $args): void
+    {
+        if (!$this->requirePremium($chatId, $responseChatId)) {
+            return;
+        }
+        $month = null;
+        $token = trim($args);
+        if (preg_match('/^\\d{4}-\\d{2}$/', $token)) {
+            $month = $token;
+        }
+
+        $report = $this->coaching->buildReport($chatId, $month);
+        $lines = [
+            '<b>Coaching Report</b>',
+            'Range: ' . $this->escape($report['range']['label'] ?? ''),
+        ];
+
+        if (!empty($report['missed'])) {
+            $lines[] = 'Inactive alerts:';
+            foreach (array_slice($report['missed'], 0, 5) as $missed) {
+                $lines[] = '- ' . $this->escape($missed);
+            }
+        }
+
+        if (!empty($report['tips'])) {
+            $lines[] = 'Tips:';
+            foreach (array_slice($report['tips'], 0, 6) as $tip) {
+                $lines[] = '- ' . $this->escape($tip);
+            }
+        } else {
+            $lines[] = 'Tips: all good so far.';
+        }
+
+        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+    }
+
+    private function handleHealth(int|string $responseChatId, int|string $chatId, string $args): void
+    {
+        if (!$this->requirePremium($chatId, $responseChatId)) {
+            return;
+        }
+        $month = null;
+        $token = trim($args);
+        if (preg_match('/^\\d{4}-\\d{2}$/', $token)) {
+            $month = $token;
+        }
+
+        $report = $this->health->buildReport($chatId, $month);
+        $coverage = $report['coverage'] ?? [];
+
+        $lines = [
+            '<b>Team Health</b>',
+            'Range: ' . $this->escape($report['range']['label'] ?? ''),
+        ];
+
+        if (!empty($report['top_mod'])) {
+            $share = ($report['top_share'] ?? 0) * 100;
+            $lines[] = 'Top workload: ' . $this->escape($report['top_mod']['display_name']) . ' (' . number_format($share, 1) . '% of messages)';
+        }
+
+        if (!empty($report['burnout'])) {
+            $lines[] = 'Burnout risk:';
+            foreach (array_slice($report['burnout'], 0, 5) as $name) {
+                $lines[] = '- ' . $this->escape($name);
+            }
+        }
+
+        if (!empty($coverage)) {
+            $sortedLow = $coverage;
+            asort($sortedLow);
+            $lowHours = array_slice($sortedLow, 0, 5, true);
+            $lines[] = 'Low coverage hours:';
+            foreach ($lowHours as $hour => $count) {
+                $lines[] = '- ' . sprintf('%02d:00', $hour) . ' (' . $count . ')';
+            }
+        }
+
+        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+    }
+
+    private function handleTrendReport(int|string $responseChatId, int|string $chatId, string $args): void
+    {
+        if (!$this->requirePremium($chatId, $responseChatId)) {
+            return;
+        }
+        $month = null;
+        $budget = null;
+        $tokens = preg_split('/\\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^\\d{4}-\\d{2}$/', $token)) {
+                $month = $token;
+                continue;
+            }
+            if (is_numeric($token)) {
+                $budget = (float)$token;
+            }
+        }
+        $stats = $this->stats->getMonthlyStats($chatId, $month);
+        $budget = $budget ?? (float)$stats['settings']['reward_budget'];
+
+        $file = $this->trendReport->generate($chatId, $month, $budget);
+        $caption = 'Trend report for ' . $stats['range']['label'];
+        $this->tg->sendDocument($responseChatId, $file, $caption);
+    }
+
+    private function handleExecutiveSummary(int|string $responseChatId, int|string $chatId, string $args): void
+    {
+        if (!$this->requirePremium($chatId, $responseChatId)) {
+            return;
+        }
+        $month = null;
+        $budget = null;
+        $tokens = preg_split('/\\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^\\d{4}-\\d{2}$/', $token)) {
+                $month = $token;
+                continue;
+            }
+            if (is_numeric($token)) {
+                $budget = (float)$token;
+            }
+        }
+        $stats = $this->stats->getMonthlyStats($chatId, $month);
+        $budget = $budget ?? (float)$stats['settings']['reward_budget'];
+
+        $file = $this->executiveSummary->generate($chatId, $month, $budget);
+        $caption = 'Executive summary for ' . $stats['range']['label'];
+        $this->tg->sendDocument($responseChatId, $file, $caption);
+    }
+
+    private function handleArchive(int|string $responseChatId, int|string $chatId): void
+    {
+        $rows = $this->archive->list((int)$chatId, null, 8);
+        if (empty($rows)) {
+            $this->tg->sendMessage($responseChatId, 'No archived reports yet.', ['parse_mode' => 'HTML']);
+            return;
+        }
+        $lines = ['Recent archived reports:'];
+        foreach ($rows as $row) {
+            $lines[] = $row['month'] . ' | ' . $row['report_type'] . ' | ' . basename($row['file_path']);
+        }
+        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+    }
+
+    private function handleRosterAdd(int|string $responseChatId, int|string $chatId, string $args, array $message): void
+    {
+        $parts = preg_split('/\\s+/', trim($args), 3);
+        $targetToken = $parts[0] ?? '';
+        $role = $parts[1] ?? 'Mod';
+        $notes = $parts[2] ?? null;
+
+        $target = $this->resolveTargetUser($targetToken);
+        if (!$target) {
+            $target = $this->resolveTargetUserFromMessage($message);
+        }
+        if (!$target) {
+            $this->tg->sendMessage($responseChatId, 'Usage: /rosteradd &lt;@username|user_id&gt; &lt;role&gt; [notes]', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $this->roster->setRole($chatId, $target['id'], $role, $notes);
+        $this->tg->sendMessage($responseChatId, 'Roster updated for ' . $this->displayName($target) . ' (' . $this->escape($role) . ').', ['parse_mode' => 'HTML']);
+    }
+
+    private function handleRosterRemove(int|string $responseChatId, int|string $chatId, string $args, array $message): void
+    {
+        $target = $this->resolveTargetUser($args);
+        if (!$target) {
+            $target = $this->resolveTargetUserFromMessage($message);
+        }
+        if (!$target) {
+            $this->tg->sendMessage($responseChatId, 'Usage: /rosterremove &lt;@username|user_id&gt;', ['parse_mode' => 'HTML']);
+            return;
+        }
+        $this->roster->remove($chatId, $target['id']);
+        $this->tg->sendMessage($responseChatId, 'Removed from roster: ' . $this->displayName($target), ['parse_mode' => 'HTML']);
+    }
+
+    private function handleRosterList(int|string $responseChatId, int|string $chatId): void
+    {
+        $rows = $this->roster->list($chatId);
+        if (empty($rows)) {
+            $this->tg->sendMessage($responseChatId, 'Roster is empty.', ['parse_mode' => 'HTML']);
+            return;
+        }
+        $lines = ['Mod roster:'];
+        foreach ($rows as $row) {
+            $name = $this->displayName($row);
+            $line = $name . ' | ' . $row['role'];
+            if (!empty($row['notes'])) {
+                $line .= ' | ' . $row['notes'];
+            }
+            $lines[] = $line;
+        }
+        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+    }
+
+    private function handleRosterRole(int|string $responseChatId, int|string $chatId, string $args, array $message): void
+    {
+        $parts = preg_split('/\\s+/', trim($args), 3);
+        $targetToken = $parts[0] ?? '';
+        $role = $parts[1] ?? null;
+        $notes = $parts[2] ?? null;
+        if (!$role) {
+            $this->tg->sendMessage($responseChatId, 'Usage: /rosterrole &lt;@username|user_id&gt; &lt;role&gt; [notes]', ['parse_mode' => 'HTML']);
+            return;
+        }
+        $target = $this->resolveTargetUser($targetToken);
+        if (!$target) {
+            $target = $this->resolveTargetUserFromMessage($message);
+        }
+        if (!$target) {
+            $this->tg->sendMessage($responseChatId, 'Usage: /rosterrole &lt;@username|user_id&gt; &lt;role&gt; [notes]', ['parse_mode' => 'HTML']);
+            return;
+        }
+        $this->roster->setRole($chatId, $target['id'], $role, $notes);
+        $this->tg->sendMessage($responseChatId, 'Role updated for ' . $this->displayName($target) . ' → ' . $this->escape($role) . '.', ['parse_mode' => 'HTML']);
+    }
+
+    private function requirePremium(int|string $chatId, int|string $responseChatId): bool
+    {
+        if ($this->subscriptions->isPremium($chatId)) {
+            return true;
+        }
+        $this->tg->sendMessage($responseChatId, 'This feature is premium. Ask the owner to upgrade with /setplan premium 30.', ['parse_mode' => 'HTML']);
+        return false;
     }
 
     private function handleSetBudget(int|string $responseChatId, int|string $chatId, string $args): void
@@ -1304,6 +1639,13 @@ class UpdateHandler
                 '/reportcsv [chat_id] [YYYY-MM] [budget]',
                 '/exportgsheet [chat_id] [YYYY-MM] [budget]',
                 '/summary [YYYY-MM] [budget]',
+                '/plan',
+                '/setplan &lt;free|premium&gt; [days] (owner only)',
+                '/coach [YYYY-MM]',
+                '/health [YYYY-MM]',
+                '/trend [YYYY-MM] [budget]',
+                '/execsummary [YYYY-MM] [budget]',
+                '/archive',
                 '/setbudget &lt;amount&gt; [chat_id]',
                 '/settimezone &lt;Region/City&gt; [chat_id]',
                 '/setactivity &lt;gap_minutes&gt; &lt;floor_minutes&gt; [chat_id]',
@@ -1313,6 +1655,10 @@ class UpdateHandler
                 '/modadd [chat_id] &lt;@username|user_id&gt;',
                 '/modremove [chat_id] &lt;@username|user_id&gt;',
                 '/modlist [chat_id]',
+                '/rosteradd &lt;@username|user_id&gt; &lt;role&gt; [notes]',
+                '/rosterrole &lt;@username|user_id&gt; &lt;role&gt; [notes]',
+                '/rosterremove &lt;@username|user_id&gt;',
+                '/rosterlist',
             ]);
         }
 

@@ -15,6 +15,12 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
 - Mid-month progress reports (MTD)
 - Multi-chat summary report
 - External stats import (ChatKeeper/Combot)
+- Premium subscriptions (plan gating + upgrades)
+- Coaching tips + team health insights
+- Executive summary + trend report + PDF export
+- Import wizard (dashboard upload)
+- Mod roster manager + report archive
+- Owner notifications (report DM, mid-month alerts, congrats templates)
 
 ## Quick Start
 1. Ensure MySQL or MariaDB is running.
@@ -36,10 +42,20 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
 7. Run the progress report migration:
    - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/006_progress_reports.sql`
    - If you use MariaDB CLI: `mariadb -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/006_progress_reports.sql`
-8. Copy config overrides:
+8. Run the subscriptions migration:
+   - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/007_subscriptions.sql`
+9. Run the mod roster migration:
+   - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/008_mod_roster.sql`
+10. Run the report archive migration:
+   - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/009_report_archive.sql`
+11. Run the notification log migration:
+   - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/010_notification_log.sql`
+12. Run the reward history migration:
+   - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/011_reward_history.sql`
+13. Copy config overrides:
    - `cp /Users/savanpatel/Documents/SPNET-MODTOOL/config.example.php /Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php`
-9. Edit `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` with your bot token and DB creds.
-10. Run in long-poll mode:
+14. Edit `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` with your bot token and DB creds.
+15. Run in long-poll mode:
    - `php /Users/savanpatel/Documents/SPNET-MODTOOL/bin/poll.php`
 
 ## Commands
@@ -56,6 +72,13 @@ Private chat commands:
 - `/reportcsv [chat_id] [YYYY-MM] [budget]`
 - `/exportgsheet [chat_id] [YYYY-MM] [budget]`
 - `/summary [YYYY-MM] [budget]` (multi-chat summary)
+- `/plan`
+- `/setplan <free|premium> [days]` (owner only)
+- `/coach [YYYY-MM]` (premium)
+- `/health [YYYY-MM]` (premium)
+- `/trend [YYYY-MM] [budget]` (premium)
+- `/execsummary [YYYY-MM] [budget]` (premium)
+- `/archive`
 - `/setbudget <amount> [chat_id]`
 - `/settimezone <Region/City> [chat_id]`
 - `/setactivity <gap_minutes> <floor_minutes> [chat_id]`
@@ -69,6 +92,10 @@ Private chat commands:
 - `/modadd [chat_id] <@username|user_id>`
 - `/modremove [chat_id] <@username|user_id>`
 - `/modlist [chat_id]`
+- `/rosteradd <@username|user_id> <role> [notes]`
+- `/rosterrole <@username|user_id> <role> [notes]`
+- `/rosterremove <@username|user_id>`
+- `/rosterlist`
 
 Tip: You can forward a user’s message to the bot in private chat and reply with `/modadd` (or `/modremove`) to avoid hunting for the user id.
 
@@ -82,6 +109,13 @@ Group chat commands:
 - “Membership time” is time between join and leave events, not actual presence.
 - Scoring uses log/sqrt scaling and day normalization. Tune it in `score_weights` and `score_rules`.
 - Reward eligibility is controlled by `eligibility` in `config.local.php`.
+
+## Premium Features
+- Use `/plan` to view the current plan and `/setplan premium 30` to enable premium (owner only).
+- Premium unlocks coaching tips, team health, executive + trend reports, PDF export, and the import wizard.
+- Reward logic adds a max-share cap, stability bonus, and penalty decay (see `premium.reward` in config).
+- Owner notifications include auto report DMs, mid-month at-risk alerts, and congrats templates.
+- PDF export requires `wkhtmltopdf` on the host.
 
 ## Webhook (optional)
 You can use `/Users/savanpatel/Documents/SPNET-MODTOOL/public/webhook.php` as your Telegram webhook handler.
@@ -113,7 +147,8 @@ Adjust `polling` in `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php`
 - Optional: add `&chat_id=CHAT_ID&month=YYYY-MM`
 - Use “All Chats” for the multi-chat view
 - Export buttons call `/Users/savanpatel/Documents/SPNET-MODTOOL/public/export.php`
-- Filters: `search`, `min_messages`, `only_eligible`, and `refresh` (seconds)
+- Filters: `search`, `min_messages`, `min_actions`, `min_active_hours`, `min_score`, `only_eligible`, `only_improving`, `limit`, `compact`, `show_sources`, `refresh`
+- Premium: PDF export, executive summary, trend report, and import wizard
 
 ## Google Sheets Export (optional)
 This uses a webhook URL from Google Apps Script. Set `google_sheets.webhook_url` in `config.local.php`.
@@ -150,3 +185,8 @@ If you have a Combot export, import it with:
 - `php /Users/savanpatel/Documents/SPNET-MODTOOL/bin/import-combot.php --file=/path/combot.csv --chat=-1001234567890 --month=YYYY-MM`
 Add `--replace` to overwrite an existing import for the same month.
 Warnings, mutes, bans, and active time (if present in the CSV) are merged into monthly stats.
+
+## Import Wizard (Premium)
+Open:
+- `http://127.0.0.1:8000/import.php?token=YOUR_TOKEN`
+Upload ChatKeeper/Combot CSV files directly from the browser.

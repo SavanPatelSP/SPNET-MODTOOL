@@ -6,9 +6,16 @@ use App\Database;
 use App\Services\SettingsService;
 use App\Services\StatsService;
 use App\Services\RewardService;
+use App\Services\RewardContextService;
+use App\Services\RewardHistoryService;
+use App\Services\ArchiveService;
+use App\Services\SubscriptionService;
+use App\Services\PdfService;
 use App\Reports\RewardSheet;
 use App\Reports\RewardCsv;
 use App\Reports\MultiChatReport;
+use App\Reports\ExecutiveSummary;
+use App\Reports\TrendReport;
 
 $dashboardConfig = $config['dashboard'] ?? [];
 $token = $dashboardConfig['token'] ?? null;
@@ -35,6 +42,11 @@ $db = new Database($config['db']);
 $settingsService = new SettingsService($db, $config);
 $statsService = new StatsService($db, $settingsService, $config);
 $rewardService = new RewardService($config);
+$rewardContext = new RewardContextService($db, $config);
+$rewardHistory = new RewardHistoryService($db);
+$archive = new ArchiveService($db);
+$subscriptions = new SubscriptionService($db, $config);
+$pdfService = new PdfService();
 
 if ($type === 'summary') {
     $chats = $db->fetchAll("SELECT id, type FROM chats WHERE type IN ('group','supergroup')");
@@ -56,11 +68,17 @@ if (!$chatId || $chatId === 'all') {
     exit;
 }
 
+$premiumTypes = ['pdf', 'executive', 'trend'];
+if (in_array($type, $premiumTypes, true) && !$subscriptions->isPremium($chatId)) {
+    echo 'Premium feature. Please upgrade to use this export.';
+    exit;
+}
+
 $bundle = $statsService->getMonthlyStats($chatId, $month);
 $effectiveBudget = $budget ?? (float)($bundle['settings']['reward_budget'] ?? 0);
 
 if ($type === 'csv') {
-    $report = new RewardCsv($statsService, $rewardService);
+    $report = new RewardCsv($statsService, $rewardService, $rewardContext, $rewardHistory, $archive);
     $file = $report->generate($chatId, $month, $effectiveBudget);
     header('Content-Type: text/csv');
     header('Content-Disposition: attachment; filename="' . basename($file) . '"');
@@ -68,8 +86,39 @@ if ($type === 'csv') {
     exit;
 }
 
-$report = new RewardSheet($statsService, $rewardService, $config);
+if ($type === 'executive') {
+    $report = new ExecutiveSummary($statsService, $rewardService, $config, $rewardContext, $archive);
+    $file = $report->generate($chatId, $month, $effectiveBudget);
+    header('Content-Type: text/html');
+    header('Content-Disposition: attachment; filename="' . basename($file) . '"');
+    readfile($file);
+    exit;
+}
+
+if ($type === 'trend') {
+    $report = new TrendReport($statsService, $rewardService, $config, $rewardContext, $archive);
+    $file = $report->generate($chatId, $month, $effectiveBudget);
+    header('Content-Type: text/html');
+    header('Content-Disposition: attachment; filename="' . basename($file) . '"');
+    readfile($file);
+    exit;
+}
+
+$report = new RewardSheet($statsService, $rewardService, $config, $rewardContext, $rewardHistory, $archive);
 $file = $report->generate($chatId, $month, $effectiveBudget);
+
+if ($type === 'pdf') {
+    $pdfFile = preg_replace('/\\.html$/', '.pdf', $file);
+    if ($pdfFile && $pdfService->htmlToPdf($file, $pdfFile)) {
+        header('Content-Type: application/pdf');
+        header('Content-Disposition: attachment; filename="' . basename($pdfFile) . '"');
+        readfile($pdfFile);
+        exit;
+    }
+    echo 'PDF engine not available. Please install wkhtmltopdf.';
+    exit;
+}
+
 header('Content-Type: text/html');
 header('Content-Disposition: attachment; filename="' . basename($file) . '"');
 readfile($file);

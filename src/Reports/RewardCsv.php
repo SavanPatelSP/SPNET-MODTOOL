@@ -4,23 +4,33 @@ namespace App\Reports;
 
 use App\Services\StatsService;
 use App\Services\RewardService;
+use App\Services\RewardContextService;
+use App\Services\RewardHistoryService;
+use App\Services\ArchiveService;
 
 class RewardCsv
 {
     private StatsService $stats;
     private RewardService $rewards;
+    private ?RewardContextService $contextService;
+    private ?RewardHistoryService $history;
+    private ?ArchiveService $archive;
 
-    public function __construct(StatsService $stats, RewardService $rewards)
+    public function __construct(StatsService $stats, RewardService $rewards, ?RewardContextService $contextService = null, ?RewardHistoryService $history = null, ?ArchiveService $archive = null)
     {
         $this->stats = $stats;
         $this->rewards = $rewards;
+        $this->contextService = $contextService;
+        $this->history = $history;
+        $this->archive = $archive;
     }
 
     public function generate(int|string $chatId, ?string $month, float $budget): string
     {
         $bundle = $this->stats->getMonthlyStats($chatId, $month);
         $mods = $bundle['mods'];
-        $ranked = $this->rewards->rankAndReward($mods, $budget);
+        $context = $this->contextService ? $this->contextService->build($chatId, $bundle['range']['month']) : [];
+        $ranked = $this->rewards->rankAndReward($mods, $budget, $context);
 
         $rewardMap = [];
         $eligibleMap = [];
@@ -68,6 +78,15 @@ class RewardCsv
         }
 
         fclose($fp);
-        return realpath($file) ?: $file;
+        $path = realpath($file) ?: $file;
+
+        if ($this->history) {
+            $this->history->record($chatId, $bundle['range']['month'], $ranked);
+        }
+        if ($this->archive) {
+            $this->archive->record((int)$chatId, 'reward_csv', $bundle['range']['month'], $path);
+        }
+
+        return $path;
     }
 }
