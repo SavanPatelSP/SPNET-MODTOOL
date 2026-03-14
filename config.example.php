@@ -42,6 +42,21 @@ return [
         'day_active' => 2.0,
     ],
 
+    // Score rules (anti-spam + normalization)
+    'score_rules' => [
+        'message_cap' => 2500,
+        'active_minutes_cap' => 30000,
+        'membership_minutes_cap' => 60000,
+        'min_days_for_full' => 7,
+    ],
+
+    // Eligibility rules (minimums for rewards)
+    'eligibility' => [
+        'min_days_active' => 3,
+        'min_messages' => 20,
+        'min_score' => 0,
+    ],
+
     // Reward distribution settings
     'reward' => [
         'top_n' => 5,
@@ -67,6 +82,13 @@ return [
         'enabled' => false,
         'day' => 1,   // day of month
         'hour' => 9,  // hour in chat timezone (0-23)
+    ],
+
+    // Mid-month progress report defaults
+    'progress_report_defaults' => [
+        'enabled' => false,
+        'day' => 15,
+        'hour' => 12,
     ],
 
     // Report branding

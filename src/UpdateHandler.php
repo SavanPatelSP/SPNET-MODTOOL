@@ -9,6 +9,7 @@ use App\Services\GoogleSheetsService;
 use App\Services\UserSettingsService;
 use App\Reports\RewardSheet;
 use App\Reports\RewardCsv;
+use App\Reports\MultiChatReport;
 use App\Logger;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -24,6 +25,7 @@ class UpdateHandler
     private RewardService $rewards;
     private RewardSheet $rewardSheet;
     private RewardCsv $rewardCsv;
+    private MultiChatReport $multiChatReport;
     private GoogleSheetsService $googleSheets;
 
     public function __construct(Database $db, Telegram $tg, array $config)
@@ -37,6 +39,7 @@ class UpdateHandler
         $this->rewards = new RewardService($config);
         $this->rewardSheet = new RewardSheet($this->stats, $this->rewards, $config);
         $this->rewardCsv = new RewardCsv($this->stats, $this->rewards);
+        $this->multiChatReport = new MultiChatReport($this->stats, $this->rewards, $config);
         $this->googleSheets = new GoogleSheetsService($config);
     }
 
@@ -153,8 +156,8 @@ class UpdateHandler
         $isPrivate = $chatType === 'private';
 
         $privateCommands = [
-            'stats', 'leaderboard', 'report', 'reportcsv', 'exportgsheet',
-            'setbudget', 'settimezone', 'setactivity', 'autoreport', 'mychats',
+            'stats', 'leaderboard', 'report', 'reportcsv', 'exportgsheet', 'summary',
+            'setbudget', 'settimezone', 'setactivity', 'autoreport', 'autoprogress', 'progress', 'mychats',
             'usechat', 'modadd', 'modremove', 'modlist',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
@@ -207,6 +210,9 @@ class UpdateHandler
                     case 'exportgsheet':
                         $this->handleExportGoogleSheet($chatId, $targetChatId, $cleanArgs);
                         return;
+                    case 'summary':
+                        $this->handleSummaryReport($chatId, $userId, $cleanArgs);
+                        return;
                     case 'setbudget':
                         $this->handleSetBudget($chatId, $targetChatId, $cleanArgs);
                         return;
@@ -218,6 +224,12 @@ class UpdateHandler
                         return;
                     case 'autoreport':
                         $this->handleAutoReport($chatId, $targetChatId, $cleanArgs);
+                        return;
+                    case 'autoprogress':
+                        $this->handleAutoProgress($chatId, $targetChatId, $cleanArgs);
+                        return;
+                    case 'progress':
+                        $this->handleProgressReport($chatId, $targetChatId, $cleanArgs);
                         return;
                     case 'modadd':
                         $this->handleModAddPrivate($chatId, $targetChatId, $cleanArgs, $message);
@@ -403,6 +415,55 @@ class UpdateHandler
 
         $filePath = $this->rewardCsv->generate($chatId, $month, $budget);
         $caption = 'CSV reward sheet for ' . $stats['range']['label'] . ' (budget: ' . number_format($budget, 2) . ')';
+        $this->tg->sendDocument($responseChatId, $filePath, $caption);
+    }
+
+    private function handleSummaryReport(int|string $responseChatId, int|string $userId, string $args): void
+    {
+        $month = null;
+        $budget = null;
+
+        $tokens = preg_split('/\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^\d{4}-\d{2}$/', $token)) {
+                $month = $token;
+                continue;
+            }
+            if (is_numeric($token)) {
+                $budget = (float)$token;
+            }
+        }
+
+        $chats = $this->getUserChats($userId, 50);
+        if (empty($chats)) {
+            $this->tg->sendMessage($responseChatId, 'No group chats found yet. Add me to a group and send a message there.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $chatIds = [];
+        foreach ($chats as $chat) {
+            $chatId = (int)$chat['id'];
+            if ($this->isAuthorized($chatId, $userId)) {
+                $chatIds[] = $chatId;
+            }
+        }
+
+        if (empty($chatIds)) {
+            $this->tg->sendMessage($responseChatId, 'No authorized chats found for multi-chat summary.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $bundle = $this->stats->getMonthlyStatsForChats($chatIds, $month);
+        $label = $bundle['range']['label'] ?? ($month ?? 'current month');
+
+        $filePath = $this->multiChatReport->generate($chatIds, $month, $budget);
+        $caption = 'Multi-chat summary for ' . $label;
+        if ($budget !== null) {
+            $caption .= ' (budget: ' . number_format($budget, 2) . ')';
+        }
         $this->tg->sendDocument($responseChatId, $filePath, $caption);
     }
 
@@ -895,6 +956,74 @@ class UpdateHandler
         $this->tg->sendMessage($responseChatId, 'Usage: /autoreport on [day] [hour] [chat_id] | /autoreport off [chat_id] | /autoreport status [chat_id]', ['parse_mode' => 'HTML']);
     }
 
+    private function handleAutoProgress(int|string $responseChatId, int|string $chatId, string $args): void
+    {
+        $parts = preg_split('/\\s+/', trim($args));
+        $action = strtolower($parts[0] ?? '');
+
+        if ($action === 'status' || $action === '') {
+            $settings = $this->settings->get($chatId);
+            $status = !empty($settings['progress_report_enabled']) ? 'ON' : 'OFF';
+            $day = $settings['progress_report_day'] ?? 15;
+            $hour = $settings['progress_report_hour'] ?? 12;
+            $this->tg->sendMessage($responseChatId, 'Progress report: ' . $status . ' | Day ' . $day . ' at ' . $hour . ':00.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        if ($action === 'on') {
+            $day = isset($parts[1]) ? (int)$parts[1] : null;
+            $hour = isset($parts[2]) ? (int)$parts[2] : null;
+            if ($day !== null && ($day < 1 || $day > 28)) {
+                $this->tg->sendMessage($responseChatId, 'Day must be between 1 and 28.', ['parse_mode' => 'HTML']);
+                return;
+            }
+            if ($hour !== null && ($hour < 0 || $hour > 23)) {
+                $this->tg->sendMessage($responseChatId, 'Hour must be between 0 and 23.', ['parse_mode' => 'HTML']);
+                return;
+            }
+            $this->settings->updateProgressReport($chatId, true, $day, $hour);
+            $this->tg->sendMessage($responseChatId, 'Progress report enabled.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        if ($action === 'off') {
+            $this->settings->updateProgressReport($chatId, false, null, null);
+            $this->tg->sendMessage($responseChatId, 'Progress report disabled.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $this->tg->sendMessage($responseChatId, 'Usage: /autoprogress on [day] [hour] [chat_id] | /autoprogress off [chat_id] | /autoprogress status [chat_id]', ['parse_mode' => 'HTML']);
+    }
+
+    private function handleProgressReport(int|string $responseChatId, int|string $chatId, string $args): void
+    {
+        $budget = null;
+        $tokens = preg_split('/\\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (is_numeric($token)) {
+                $budget = (float)$token;
+            }
+        }
+
+        $bundle = $this->stats->getMonthToDateStats($chatId);
+        if (empty($bundle['mods'])) {
+            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd [chat_id] @username in private chat (or /usechat).', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        if ($budget === null) {
+            $budget = (float)($bundle['settings']['reward_budget'] ?? 0);
+        }
+
+        $suffix = ($bundle['range']['month'] ?? 'mtd') . '-mtd';
+        $filePath = $this->rewardSheet->generate($chatId, null, $budget, $bundle, $suffix);
+        $caption = 'Progress report (MTD) for ' . $bundle['range']['label'] . ' (budget: ' . number_format($budget, 2) . ')';
+        $this->tg->sendDocument($responseChatId, $filePath, $caption);
+    }
+
     private function handleModerationCommand(int|string $chatId, array $message, string $command, string $args): void
     {
         if (!isset($message['reply_to_message']['from'])) {
@@ -1174,10 +1303,13 @@ class UpdateHandler
                 '/report [chat_id] [YYYY-MM] [budget]',
                 '/reportcsv [chat_id] [YYYY-MM] [budget]',
                 '/exportgsheet [chat_id] [YYYY-MM] [budget]',
+                '/summary [YYYY-MM] [budget]',
                 '/setbudget &lt;amount&gt; [chat_id]',
                 '/settimezone &lt;Region/City&gt; [chat_id]',
                 '/setactivity &lt;gap_minutes&gt; &lt;floor_minutes&gt; [chat_id]',
                 '/autoreport on [day] [hour] [chat_id]',
+                '/autoprogress on [day] [hour] [chat_id]',
+                '/progress [chat_id] [budget]',
                 '/modadd [chat_id] &lt;@username|user_id&gt;',
                 '/modremove [chat_id] &lt;@username|user_id&gt;',
                 '/modlist [chat_id]',

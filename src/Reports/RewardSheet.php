@@ -18,15 +18,19 @@ class RewardSheet
         $this->config = $config;
     }
 
-    public function generate(int|string $chatId, ?string $month, float $budget): string
+    public function generate(int|string $chatId, ?string $month, float $budget, ?array $bundle = null, ?string $suffix = null): string
     {
-        $bundle = $this->stats->getMonthlyStats($chatId, $month);
+        $bundle = $bundle ?? $this->stats->getMonthlyStats($chatId, $month);
         $mods = $bundle['mods'];
         $ranked = $this->rewards->rankAndReward($mods, $budget);
 
         $rewardMap = [];
+        $eligibilityMap = [];
         foreach ($ranked as $item) {
             $rewardMap[$item['user_id']] = $item['reward'];
+            if (array_key_exists('eligible', $item)) {
+                $eligibilityMap[$item['user_id']] = (bool)$item['eligible'];
+            }
         }
 
         $modsSorted = $mods;
@@ -52,13 +56,15 @@ class RewardSheet
             'summary' => $summary,
             'mods' => $modsSorted,
             'reward_map' => $rewardMap,
+            'eligibility_map' => $eligibilityMap,
             'top_score' => $topScore,
             'insights' => $insights,
             'generated_at' => gmdate('Y-m-d H:i:s') . ' UTC',
         ]);
 
         $safeMonth = $bundle['range']['month'];
-        $file = __DIR__ . '/../../storage/reports/reward-sheet-' . $chatId . '-' . $safeMonth . '.html';
+        $fileSuffix = $suffix ?? $safeMonth;
+        $file = __DIR__ . '/../../storage/reports/reward-sheet-' . $chatId . '-' . $fileSuffix . '.html';
         file_put_contents($file, $html);
         return realpath($file) ?: $file;
     }
@@ -77,22 +83,42 @@ class RewardSheet
         $insights = [];
 
         $top = $mods[0];
-        $insights[] = 'Top Mod: ' . $top['display_name'] . ' with score ' . number_format($top['score'], 2);
+        $insights[] = [
+            'title' => 'Top Mod',
+            'value' => $top['display_name'],
+            'meta' => 'Score ' . number_format($top['score'], 2),
+        ];
 
         if ($mostActive) {
-            $insights[] = 'Most Active: ' . $mostActive['display_name'] . ' with ' . number_format($mostActive['active_minutes'], 1) . ' active minutes.';
+            $insights[] = [
+                'title' => 'Most Active',
+                'value' => $mostActive['display_name'],
+                'meta' => number_format($mostActive['active_minutes'] / 60, 1) . ' hours',
+            ];
         }
 
         if ($mostConsistent) {
-            $insights[] = 'Most Consistent: ' . $mostConsistent['display_name'] . ' with ' . $mostConsistent['days_active'] . ' active days.';
+            $insights[] = [
+                'title' => 'Most Consistent',
+                'value' => $mostConsistent['display_name'],
+                'meta' => $mostConsistent['days_active'] . ' active days',
+            ];
         }
 
         if ($mostImproved && $mostImproved['improvement'] !== null) {
-            $insights[] = 'Most Improved: ' . $mostImproved['display_name'] . ' up ' . number_format($mostImproved['improvement'], 1) . '%.';
+            $insights[] = [
+                'title' => 'Most Improved',
+                'value' => $mostImproved['display_name'],
+                'meta' => 'Up ' . number_format($mostImproved['improvement'], 1) . '%',
+            ];
         }
 
         if ($mostModeration) {
-            $insights[] = 'Most Moderation Actions: ' . $mostModeration['display_name'] . ' with ' . $mostModeration['actions_total'] . ' actions.';
+            $insights[] = [
+                'title' => 'Most Actions',
+                'value' => $mostModeration['display_name'],
+                'meta' => $mostModeration['actions_total'] . ' actions',
+            ];
         }
 
         return $insights;
@@ -125,18 +151,38 @@ class RewardSheet
         foreach ($mods as $mod) {
             $reward = $data['reward_map'][$mod['user_id']] ?? 0.0;
             $scorePercent = $data['top_score'] > 0 ? ($mod['score'] / $data['top_score']) * 100 : 0;
-            $rows .= '<tr>';
+            $eligible = $data['eligibility_map'][$mod['user_id']] ?? true;
+            $rowClass = $eligible ? '' : 'row-ineligible';
+            $internalMessages = $mod['internal_messages'] ?? $mod['messages'];
+            $externalMessages = $mod['external_messages'] ?? 0;
+            $internalActive = $mod['internal_active_minutes'] ?? $mod['active_minutes'];
+            $externalActive = $mod['external_active_minutes'] ?? 0;
+
+            $trendLabel = 'N/A';
+            $trendClass = 'trend-flat';
+            if ($mod['improvement'] !== null) {
+                if ($mod['improvement'] >= 0) {
+                    $trendLabel = 'Up ' . number_format($mod['improvement'], 1) . '%';
+                    $trendClass = 'trend-up';
+                } else {
+                    $trendLabel = 'Down ' . number_format(abs($mod['improvement']), 1) . '%';
+                    $trendClass = 'trend-down';
+                }
+            }
+
+            $rows .= '<tr class="' . $rowClass . '">';
             $rows .= '<td>' . $rank . '</td>';
             $rows .= '<td>' . $this->escape($mod['display_name']) . '</td>';
             $rows .= '<td>' . number_format($mod['score'], 2) . '<div class="bar"><span style="width:' . number_format($scorePercent, 2) . '%"></span></div></td>';
-            $rows .= '<td>' . $mod['messages'] . '</td>';
+            $rows .= '<td>' . $mod['messages'] . '<div class="sub">Bot ' . (int)$internalMessages . ' | Ext ' . (int)$externalMessages . '</div></td>';
             $rows .= '<td>' . $mod['warnings'] . '</td>';
             $rows .= '<td>' . $mod['mutes'] . '</td>';
             $rows .= '<td>' . $mod['bans'] . '</td>';
-            $rows .= '<td>' . number_format($mod['active_minutes'] / 60, 1) . 'h</td>';
+            $rows .= '<td>' . number_format($mod['active_minutes'] / 60, 1) . 'h<div class="sub">Bot ' . number_format($internalActive / 60, 1) . 'h | Ext ' . number_format($externalActive / 60, 1) . 'h</div></td>';
             $rows .= '<td>' . number_format($mod['membership_minutes'] / 60, 1) . 'h</td>';
             $rows .= '<td>' . $mod['days_active'] . '</td>';
-            $rows .= '<td>' . ($mod['improvement'] !== null ? number_format($mod['improvement'], 1) . '%' : 'N/A') . '</td>';
+            $rows .= '<td><span class="trend ' . $trendClass . '">' . $trendLabel . '</span></td>';
+            $rows .= '<td>' . ($eligible ? 'Eligible' : 'Below minimums') . '</td>';
             $rows .= '<td>' . number_format($reward, 2) . '</td>';
             $rows .= '</tr>';
             $rank++;
@@ -144,7 +190,13 @@ class RewardSheet
 
         $insightHtml = '';
         foreach ($data['insights'] as $insight) {
-            $insightHtml .= '<li>' . $this->escape($insight) . '</li>';
+            $insightHtml .= '<div class="badge">';
+            $insightHtml .= '<div class="badge-title">' . $this->escape($insight['title']) . '</div>';
+            $insightHtml .= '<div class="badge-value">' . $this->escape($insight['value']) . '</div>';
+            if (!empty($insight['meta'])) {
+                $insightHtml .= '<div class="badge-meta">' . $this->escape($insight['meta']) . '</div>';
+            }
+            $insightHtml .= '</div>';
         }
 
         $summary = $data['summary'];
@@ -196,10 +248,11 @@ body {
     margin-bottom: 24px;
 }
 .card {
-    background: #f7f4ef;
-    border: 1px solid #efe7dd;
+    background: #ffffff;
+    border: 1px solid #eef0f4;
     border-radius: 14px;
     padding: 16px;
+    box-shadow: 0 10px 24px rgba(31, 42, 68, 0.08);
 }
 .card h3 {
     margin: 0 0 8px;
@@ -211,6 +264,11 @@ body {
 .card .value {
     font-size: 22px;
     font-weight: 700;
+}
+.sub {
+    margin-top: 6px;
+    font-size: 11px;
+    color: #6b7280;
 }
 .section-title {
     font-size: 18px;
@@ -244,16 +302,48 @@ body {
     height: 100%;
     background: var(--accent);
 }
-.insights {
-    margin-top: 18px;
-    padding: 16px;
+.row-ineligible {
+    opacity: 0.65;
+}
+.trend {
+    font-weight: 600;
+}
+.trend-up {
+    color: #16a34a;
+}
+.trend-down {
+    color: #dc2626;
+}
+.trend-flat {
+    color: #6b7280;
+}
+.badge-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+}
+.badge {
     background: #1f2a44;
     color: #f9fafb;
     border-radius: 14px;
+    padding: 14px 16px;
+    box-shadow: 0 14px 28px rgba(31, 42, 68, 0.18);
 }
-.insights ul {
-    margin: 0;
-    padding-left: 18px;
+.badge-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #93c5fd;
+}
+.badge-value {
+    font-size: 16px;
+    font-weight: 700;
+    margin-top: 6px;
+}
+.badge-meta {
+    font-size: 12px;
+    color: #cbd5f5;
+    margin-top: 4px;
 }
 .footer {
     margin-top: 24px;
@@ -283,10 +373,12 @@ body {
         <div class="card">
             <h3>Total Messages</h3>
             <div class="value">' . (int)$summary['messages'] . '</div>
+            <div class="sub">Bot ' . (int)($summary['internal_messages'] ?? 0) . ' | Ext ' . (int)($summary['external_messages'] ?? 0) . '</div>
         </div>
         <div class="card">
             <h3>Active Hours</h3>
             <div class="value">' . number_format($summary['active_minutes'] / 60, 1) . 'h</div>
+            <div class="sub">Bot ' . number_format(($summary['internal_active_minutes'] ?? 0) / 60, 1) . 'h | Ext ' . number_format(($summary['external_active_minutes'] ?? 0) / 60, 1) . 'h</div>
         </div>
         <div class="card">
             <h3>Total Actions</h3>
@@ -313,6 +405,7 @@ body {
             <th>Member</th>
             <th>Days</th>
             <th>Trend</th>
+            <th>Eligible</th>
             <th>Reward</th>
         </tr>
         </thead>
@@ -322,10 +415,8 @@ body {
     </table>
 
     <div class="section-title">Highlights</div>
-    <div class="insights">
-        <ul>
-            ' . $insightHtml . '
-        </ul>
+    <div class="badge-grid">
+        ' . $insightHtml . '
     </div>
 
     <div class="footer">

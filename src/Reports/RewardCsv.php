@@ -23,8 +23,12 @@ class RewardCsv
         $ranked = $this->rewards->rankAndReward($mods, $budget);
 
         $rewardMap = [];
+        $eligibleMap = [];
         foreach ($ranked as $item) {
             $rewardMap[$item['user_id']] = $item['reward'];
+            if (array_key_exists('eligible', $item)) {
+                $eligibleMap[$item['user_id']] = (bool)$item['eligible'];
+            }
         }
 
         usort($mods, fn($a, $b) => $b['score'] <=> $a['score']);
@@ -33,22 +37,28 @@ class RewardCsv
         $fp = fopen($file, 'w');
 
         fputcsv($fp, [
-            'Rank', 'Mod', 'Score', 'Messages', 'Warnings', 'Mutes', 'Bans',
-            'Active Hours', 'Membership Hours', 'Days Active', 'Improvement %', 'Reward'
+            'Rank', 'Mod', 'Eligible', 'Score', 'Messages', 'Messages (Bot)', 'Messages (External)',
+            'Warnings', 'Mutes', 'Bans', 'Active Hours', 'Active Hours (External)',
+            'Membership Hours', 'Days Active', 'Improvement %', 'Reward'
         ]);
 
         $rank = 1;
         foreach ($mods as $mod) {
             $reward = $rewardMap[$mod['user_id']] ?? 0.0;
+            $eligible = $eligibleMap[$mod['user_id']] ?? null;
             fputcsv($fp, [
                 $rank,
                 $mod['display_name'],
+                $eligible === null ? '' : ($eligible ? 'Yes' : 'No'),
                 number_format($mod['score'], 2, '.', ''),
                 $mod['messages'],
+                $mod['internal_messages'] ?? $mod['messages'],
+                $mod['external_messages'] ?? 0,
                 $mod['warnings'],
                 $mod['mutes'],
                 $mod['bans'],
                 number_format($mod['active_minutes'] / 60, 1, '.', ''),
+                number_format(($mod['external_active_minutes'] ?? 0) / 60, 1, '.', ''),
                 number_format($mod['membership_minutes'] / 60, 1, '.', ''),
                 $mod['days_active'],
                 $mod['improvement'] !== null ? number_format($mod['improvement'], 1, '.', '') : '',

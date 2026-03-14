@@ -1,0 +1,5 @@
+ALTER TABLE external_user_stats
+    ADD COLUMN warnings INT NOT NULL DEFAULT 0,
+    ADD COLUMN mutes INT NOT NULL DEFAULT 0,
+    ADD COLUMN bans INT NOT NULL DEFAULT 0,
+    ADD COLUMN active_minutes INT NOT NULL DEFAULT 0;

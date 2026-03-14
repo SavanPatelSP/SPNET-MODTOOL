@@ -116,8 +116,8 @@ while (($row = fgetcsv($handle, 0, $delimiter, $enclosure, $escape)) !== false) 
     );
 
     $db->exec(
-        'INSERT INTO external_user_stats (chat_id, user_id, source, month, messages, replies, reputation_take, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        'INSERT INTO external_user_stats (chat_id, user_id, source, month, messages, replies, reputation_take, warnings, mutes, bans, active_minutes, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?)
          ON DUPLICATE KEY UPDATE messages = VALUES(messages), replies = VALUES(replies), reputation_take = VALUES(reputation_take), updated_at = VALUES(updated_at)',
         [$chatId, $userId, $source, $month, $messageCount, $replyCount, $reputationTake, $now, $now]
     );
