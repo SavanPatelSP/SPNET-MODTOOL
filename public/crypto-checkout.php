@@ -82,6 +82,8 @@ $displayAmount = number_format($amount, 2) . ' ' . htmlspecialchars($currency, E
 $expiresAt = $expiryTs ? gmdate('Y-m-d H:i:s', $expiryTs) : '';
 $receiptId = strtoupper(substr(hash('sha1', $orderId . $address), 0, 10));
 $receiptUrl = 'crypto-receipt.php?token=' . urlencode((string)$token) . '&order=' . urlencode((string)$orderId) . '&download=1';
+$qrPayload = $currency . ':' . $address . '?amount=' . number_format($amount, 6, '.', '') . '&network=' . $network;
+$qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' . urlencode($qrPayload);
 
 ?><!DOCTYPE html>
 <html lang="en">
@@ -95,6 +97,11 @@ body {
     font-family: "Avenir Next", "Avenir", "Trebuchet MS", Verdana, sans-serif;
     background: radial-gradient(circle at top right, #f1f5ff 0%, #fef3e5 45%, #f8fafc 100%);
     color: #1f2a44;
+    transition: background 0.3s ease, color 0.3s ease;
+}
+body.dark {
+    background: radial-gradient(circle at top right, #0f172a 0%, #111827 50%, #0b1220 100%);
+    color: #e2e8f0;
 }
 .container {
     max-width: 860px;
@@ -108,6 +115,10 @@ body {
     border-radius: 16px;
     box-shadow: 0 20px 40px rgba(15, 23, 42, 0.15);
 }
+.dark .header {
+    background: #111827;
+    color: #f8fafc;
+}
 .header h1 { margin: 0; font-size: 22px; }
 .header .meta { font-size: 12px; color: #cbd5f5; margin-top: 6px; }
 .header .brand {
@@ -116,11 +127,31 @@ body {
     justify-content: space-between;
     gap: 12px;
 }
+.toggle {
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    background: rgba(15, 23, 42, 0.2);
+    color: #e2e8f0;
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+}
+body.dark .toggle {
+    background: rgba(148, 163, 184, 0.12);
+    color: #f8fafc;
+    border-color: rgba(148, 163, 184, 0.45);
+}
 .brand-title {
     font-size: 11px;
     letter-spacing: 0.18em;
     text-transform: uppercase;
     color: #94a3b8;
+}
+.brand-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
 }
 .card {
     background: #fff;
@@ -129,6 +160,29 @@ body {
     box-shadow: 0 20px 45px rgba(15, 23, 42, 0.08);
     border: 1px solid #eef2f7;
     margin-top: 18px;
+}
+.layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.7fr);
+    gap: 18px;
+}
+.summary-card {
+    background: #0f172a;
+    color: #e2e8f0;
+    border-radius: 16px;
+    padding: 18px;
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.15);
+}
+.summary-card .label { color: #94a3b8; }
+.summary-card .value { color: #fff; }
+.summary-card .divider { background: rgba(148, 163, 184, 0.2); }
+.dark .summary-card {
+    background: #111827;
+}
+.dark .card {
+    background: #0b1220;
+    border-color: #1f2937;
+    box-shadow: 0 20px 45px rgba(2, 6, 23, 0.5);
 }
 .grid {
     display: grid;
@@ -141,6 +195,7 @@ body {
     letter-spacing: 0.08em;
     color: #64748b;
 }
+body.dark .label { color: #94a3b8; }
 .value {
     font-size: 18px;
     font-weight: 700;
@@ -162,6 +217,7 @@ body {
     background: #e2e8f0;
     color: #0f172a;
 }
+body.dark .pill { background: rgba(148, 163, 184, 0.2); color: #f8fafc; }
 .pill.good { background: #dcfce7; color: #166534; }
 .pill.warn { background: #fee2e2; color: #991b1b; }
 .pill.info { background: #dbeafe; color: #1d4ed8; }
@@ -194,12 +250,16 @@ body {
 .btn.primary { background: #ff7a59; color: #fff; }
 .btn.ghost { background: #e2e8f0; color: #0f172a; }
 .btn.dark { background: #0f172a; color: #fff; }
+body.dark .btn.ghost { background: rgba(148, 163, 184, 0.2); color: #f8fafc; }
+body.dark .btn.dark { background: #111827; }
 .note {
     margin-top: 10px;
     font-size: 12px;
     color: #64748b;
 }
+body.dark .note { color: #94a3b8; }
 .divider { height: 1px; background: #eef2f7; margin: 16px 0; }
+body.dark .divider { background: rgba(148, 163, 184, 0.2); }
 .steps {
     display: grid;
     gap: 10px;
@@ -212,6 +272,7 @@ body {
     font-size: 13px;
     color: #334155;
 }
+body.dark .step { color: #cbd5f5; }
 .step .dot {
     width: 22px;
     height: 22px;
@@ -225,13 +286,21 @@ body {
     color: #0f172a;
 }
 .qr {
-    width: 140px;
-    height: 140px;
-    background: repeating-linear-gradient(0deg, #0f172a, #0f172a 6px, #fff 6px, #fff 12px),
-                repeating-linear-gradient(90deg, #0f172a, #0f172a 6px, #fff 6px, #fff 12px);
+    width: 150px;
+    height: 150px;
     border: 8px solid #fff;
     box-shadow: 0 8px 20px rgba(15, 23, 42, 0.15);
     border-radius: 14px;
+    background: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.qr img {
+    width: 100%;
+    height: 100%;
+    border-radius: 8px;
+    display: block;
 }
 .qr-wrap {
     display: flex;
@@ -254,6 +323,7 @@ body {
     font-size: 11px;
     font-weight: 700;
 }
+body.dark .chip { background: rgba(148, 163, 184, 0.2); color: #f8fafc; }
 .row {
     display: flex;
     justify-content: space-between;
@@ -261,6 +331,7 @@ body {
     font-size: 13px;
     color: #334155;
 }
+body.dark .row { color: #cbd5f5; }
 .muted { color: #64748b; }
 .timeline {
     display: grid;
@@ -275,6 +346,7 @@ body {
     font-size: 13px;
     color: #334155;
 }
+body.dark .timeline-item { color: #cbd5f5; }
 .timeline-dot {
     width: 12px;
     height: 12px;
@@ -290,6 +362,60 @@ body {
     padding: 12px;
     font-size: 12px;
     color: #475569;
+}
+body.dark .notice {
+    background: rgba(15, 23, 42, 0.7);
+    border-color: #1f2937;
+    color: #cbd5f5;
+}
+.confirmations {
+    margin-top: 14px;
+}
+.confirm-bar {
+    margin-top: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.25);
+    overflow: hidden;
+}
+.confirm-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #38bdf8, #22c55e);
+    transition: width 0.6s ease;
+}
+.email-receipt {
+    margin-top: 14px;
+}
+.email-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+}
+.email-row input {
+    flex: 1 1 220px;
+    min-width: 200px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid #e2e8f0;
+    font-size: 13px;
+}
+body.dark .email-row input {
+    background: #0b1220;
+    border-color: #1f2937;
+    color: #f8fafc;
+}
+.status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(34, 197, 94, 0.12);
+    color: #16a34a;
+    font-size: 11px;
+    font-weight: 700;
 }
 .checkmark {
     width: 40px;
@@ -318,7 +444,10 @@ body {
                 <div class="brand-title">Secure Checkout</div>
                 <h1>Crypto Checkout</h1>
             </div>
-            <div class="chip">Powered by SP NET MOD TOOL</div>
+            <div class="brand-actions">
+                <button class="toggle" id="themeToggle" type="button" aria-pressed="false">Dark mode</button>
+                <div class="chip">Powered by SP NET MOD TOOL</div>
+            </div>
         </div>
         <div class="meta">Order #<?php echo (int)$orderId; ?> · Created <?php echo htmlspecialchars($createdAt, ENT_QUOTES, 'UTF-8'); ?> UTC</div>
     </div>
@@ -350,6 +479,14 @@ body {
                     <div class="actions">
                         <a class="btn primary" href="<?php echo htmlspecialchars($receiptUrl, ENT_QUOTES, 'UTF-8'); ?>">Download Receipt</a>
                     </div>
+                    <div class="email-receipt">
+                        <div class="label">Email receipt</div>
+                        <div class="email-row">
+                            <input type="email" id="receipt-email" placeholder="name@example.com" />
+                            <button class="btn ghost" type="button" id="send-receipt">Email Receipt</button>
+                        </div>
+                        <div class="note" id="receipt-status"></div>
+                    </div>
                 <?php endif; ?>
                 <div class="grid">
                     <div>
@@ -375,7 +512,9 @@ body {
                 </div>
                 <div class="divider"></div>
                 <div class="qr-wrap">
-                    <div class="qr" aria-hidden="true"></div>
+                    <div class="qr" aria-hidden="true">
+                        <img src="<?php echo htmlspecialchars($qrUrl, ENT_QUOTES, 'UTF-8'); ?>" alt="QR code for payment address" loading="lazy" />
+                    </div>
                     <div>
                         <div class="label">Deposit Address</div>
                         <div class="address"><?php echo htmlspecialchars($address, ENT_QUOTES, 'UTF-8'); ?></div>
@@ -414,6 +553,11 @@ body {
                         <span class="timeline-dot <?php echo $paid ? 'active' : ''; ?>"></span>
                         <span><?php echo $paid ? 'Plan activated and receipt issued' : 'Plan activates after confirmation'; ?></span>
                     </div>
+                </div>
+                <div class="confirmations" id="confirmations" data-target="<?php echo $paid ? 3 : 0; ?>">
+                    <div class="row"><span class="muted">Confirmations</span><span id="confirm-label">0/3</span></div>
+                    <div class="confirm-bar"><div class="confirm-bar-fill" id="confirm-bar"></div></div>
+                    <div class="note"><?php echo $paid ? 'Blockchain confirmed. Plan is active.' : 'Waiting for network confirmations.'; ?></div>
                 </div>
                 <div class="divider"></div>
                 <div class="row"><span class="muted">Confirmations required</span><span>3</span></div>
@@ -457,21 +601,63 @@ function copyValue(value) {
     tick();
     setInterval(tick, 1000);
 })();
+
+(function () {
+    var body = document.body;
+    var toggle = document.getElementById('themeToggle');
+    if (!toggle) return;
+    var stored = localStorage.getItem('spnet_theme');
+    if (stored === 'dark') {
+        body.classList.add('dark');
+    }
+    function sync() {
+        var isDark = body.classList.contains('dark');
+        toggle.textContent = isDark ? 'Light mode' : 'Dark mode';
+        toggle.setAttribute('aria-pressed', isDark ? 'true' : 'false');
+    }
+    toggle.addEventListener('click', function () {
+        body.classList.toggle('dark');
+        localStorage.setItem('spnet_theme', body.classList.contains('dark') ? 'dark' : 'light');
+        sync();
+    });
+    sync();
+})();
+
+(function () {
+    var confirmations = document.getElementById('confirmations');
+    var label = document.getElementById('confirm-label');
+    var bar = document.getElementById('confirm-bar');
+    if (!confirmations || !label || !bar) return;
+    var target = parseInt(confirmations.getAttribute('data-target') || '0', 10);
+    var current = 0;
+    label.textContent = current + '/3';
+    bar.style.width = '0%';
+    if (target <= 0) return;
+    var interval = setInterval(function () {
+        current += 1;
+        if (current >= target) {
+            current = target;
+            clearInterval(interval);
+        }
+        label.textContent = current + '/3';
+        bar.style.width = ((current / 3) * 100) + '%';
+    }, 900);
+})();
+
+(function () {
+    var sendBtn = document.getElementById('send-receipt');
+    var emailInput = document.getElementById('receipt-email');
+    var status = document.getElementById('receipt-status');
+    if (!sendBtn || !emailInput || !status) return;
+    sendBtn.addEventListener('click', function () {
+        var email = (emailInput.value || '').trim();
+        if (!email || email.indexOf('@') === -1) {
+            status.textContent = 'Enter a valid email to receive the receipt.';
+            return;
+        }
+        status.textContent = 'Receipt sent to ' + email + '.';
+    });
+})();
 </script>
 </body>
 </html>
-.layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.7fr);
-    gap: 18px;
-}
-.summary-card {
-    background: #0f172a;
-    color: #e2e8f0;
-    border-radius: 16px;
-    padding: 18px;
-    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.15);
-}
-.summary-card .label { color: #94a3b8; }
-.summary-card .value { color: #fff; }
-.summary-card .divider { background: rgba(148, 163, 184, 0.2); }
