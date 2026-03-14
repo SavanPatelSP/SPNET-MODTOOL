@@ -251,9 +251,15 @@ http://127.0.0.1:8000/import.php?token=YOUR_TOKEN
 
 ## Premium Features
 - Use `/plan` to view the current plan and `/setplan premium 30` to enable premium (owner only).
-- Premium unlocks coaching tips, team health, executive + trend reports, PDF export, and the import wizard.
-- Reward logic adds a max-share cap, stability bonus, and penalty decay (see `premium.reward` in config).
-- Owner notifications include auto report DMs, mid-month at-risk alerts, and congrats templates.
+- Fair reward engine with anti-spam caps + day normalization.
+- Smarter rewards with max-share cap, stability bonus, and penalty decay (see `premium.reward` in config).
+- Coaching tips and team health (coverage gaps, workload balance, burnout risk).
+- Executive summary + trend report + PDF export.
+- Import wizard with ChatKeeper/Combot source breakdown.
+- Report archive + reward history.
+- Owner notifications (auto report DMs, mid-month alerts, congrats templates).
+- Log channel + changelog updates.
+- Enterprise add-ons: white-label branding, assisted setup, scoring calibration, dedicated support + SLA.
 - PDF export requires `wkhtmltopdf` on the host.
 
 ## Webhook (optional)
