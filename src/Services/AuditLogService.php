@@ -23,7 +23,7 @@ class AuditLogService
         );
     }
 
-    public function list(int|string $chatId = null, int $limit = 100): array
+    public function list(?int $chatId = null, int $limit = 100): array
     {
         $limit = max(1, min(500, $limit));
         if ($chatId !== null) {
