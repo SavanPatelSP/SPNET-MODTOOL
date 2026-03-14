@@ -1056,6 +1056,10 @@ class UpdateHandler
             $this->sendStarsInvoice($responseChatId, $userId, (int)$targetChatId, $amount, $plan, $days);
             return;
         }
+        if ($method === 'crypto') {
+            $this->sendCryptoCheckout($responseChatId, $userId, (int)$targetChatId, $amount, $plan, $days);
+            return;
+        }
 
         if ($plan) {
             $this->subscriptions->setPlan($targetChatId, $plan, $days);
@@ -1105,6 +1109,61 @@ class UpdateHandler
             'At: ' . $this->escape($latest['created_at'] ?? ''),
         ];
         $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+    }
+
+    private function sendCryptoCheckout(int|string $responseChatId, int|string $userId, int $chatId, float $amount, ?string $plan, ?int $days): void
+    {
+        $paymentsConfig = $this->config['payments'] ?? [];
+        $cryptoConfig = $paymentsConfig['crypto'] ?? [];
+        $network = $cryptoConfig['network'] ?? 'TRC20';
+        $currency = $cryptoConfig['currency'] ?? 'USDT';
+        $dashboard = $this->config['dashboard'] ?? [];
+        $token = $dashboard['token'] ?? null;
+        $baseUrl = $dashboard['base_url'] ?? 'http://127.0.0.1:8000';
+        $baseUrl = rtrim((string)$baseUrl, '/');
+        if (!$token) {
+            $this->tg->sendMessage($responseChatId, 'Set dashboard.token in config.local.php to open the crypto checkout page.', ['parse_mode' => 'HTML']);
+            return;
+        }
+        $address = $this->generateTronAddress();
+
+        $orderId = $this->payments->createPending($chatId, $userId, 'crypto', $amount, $currency, $plan, $days, [
+            'network' => $network,
+            'address' => $address,
+        ]);
+        $checkoutUrl = $baseUrl . '/crypto-checkout.php?token=' . urlencode((string)$token) . '&order=' . urlencode((string)$orderId);
+
+        $lines = [
+            '<b>Crypto Test Checkout Created</b>',
+            'Order: ' . $orderId,
+            'Amount: ' . number_format($amount, 2) . ' ' . $this->escape($currency),
+            'Network: ' . $this->escape($network),
+            'Address: <code>' . $this->escape($address) . '</code>',
+            'Open checkout: ' . $checkoutUrl,
+        ];
+        if ($plan) {
+            $lines[] = 'Plan on success: ' . strtoupper($plan) . ($days ? (' for ' . $days . ' days') : '');
+        }
+
+        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+        $this->audit->log('crypto_checkout_created', $userId, $chatId, [
+            'order_id' => $orderId,
+            'amount' => $amount,
+            'currency' => $currency,
+            'network' => $network,
+            'plan' => $plan,
+            'days' => $days,
+        ]);
+    }
+
+    private function generateTronAddress(): string
+    {
+        $alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+        $addr = 'T';
+        for ($i = 0; $i < 33; $i++) {
+            $addr .= $alphabet[random_int(0, strlen($alphabet) - 1)];
+        }
+        return $addr;
     }
 
     private function handlePreCheckoutQuery(array $query): void

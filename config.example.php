@@ -182,6 +182,7 @@ return [
         'token' => null,
         'default_chat_id' => null,
         'refresh_seconds' => 0,
+        'base_url' => 'http://127.0.0.1:8000',
     ],
 
     // Log channel (optional)
@@ -210,6 +211,10 @@ return [
             'sandbox' => true,
             'title' => 'SP NET MOD TOOL Premium',
             'description' => 'Test purchase for SP NET MOD TOOL (Stars sandbox).',
+        ],
+        'crypto' => [
+            'currency' => 'USDT',
+            'network' => 'TRC20',
         ],
         'stars_tiers' => [
             ['min' => 500, 'plan' => 'premium', 'days' => 30],

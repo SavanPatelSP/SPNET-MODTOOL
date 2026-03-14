@@ -58,6 +58,29 @@ class PaymentService
         );
     }
 
+    public function createPending(int|string $chatId, int|string $userId, string $method, float $amount, string $currency, ?string $plan, ?int $days, array $meta = []): int
+    {
+        $now = gmdate('Y-m-d H:i:s');
+        $payload = $meta ? json_encode($meta, JSON_UNESCAPED_UNICODE) : null;
+        $this->db->exec(
+            'INSERT INTO payments (chat_id, user_id, method, amount, currency, status, plan, days, meta, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [(int)$chatId, (int)$userId, $method, $amount, $currency, 'pending', $plan, $days, $payload, $now]
+        );
+        return (int)$this->db->pdo()->lastInsertId();
+    }
+
+    public function getById(int $id): ?array
+    {
+        $row = $this->db->fetch('SELECT * FROM payments WHERE id = ?', [$id]);
+        return $row ?: null;
+    }
+
+    public function updateStatus(int $id, string $status): void
+    {
+        $this->db->exec('UPDATE payments SET status = ? WHERE id = ?', [$status, $id]);
+    }
+
     public function latestForUser(int|string $userId): ?array
     {
         $row = $this->db->fetch(
