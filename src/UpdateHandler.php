@@ -194,7 +194,7 @@ class UpdateHandler
             'usechat', 'modadd', 'modremove', 'modlist',
             'plan', 'setplan', 'coach', 'health', 'trend', 'execsummary', 'archive',
             'rosteradd', 'rosterremove', 'rosterlist', 'rosterrole',
-            'premium', 'benefits',
+            'premium', 'benefits', 'pricing',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
 
@@ -312,6 +312,9 @@ class UpdateHandler
                     case 'premium':
                     case 'benefits':
                         $this->handlePremiumBenefits($chatId, $targetChatId);
+                        return;
+                    case 'pricing':
+                        $this->handlePricing($chatId, $targetChatId);
                         return;
                 }
             }
@@ -908,11 +911,53 @@ class UpdateHandler
             '- Owner notifications (auto report DM, mid-month alerts, congrats)',
             '- Reward upgrades (max-share cap, stability bonus, penalty decay)',
             '',
+            'See tiers: /pricing',
             'Upgrade (owner only): /setplan premium 30',
         ];
         $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_commands')) {
             Logger::info('Premium benefits viewed for chat ' . $chatId);
+        }
+    }
+
+    private function handlePricing(int|string $responseChatId, int|string $chatId): void
+    {
+        $sub = $this->subscriptions->get($chatId);
+        $plan = strtoupper($sub['plan'] ?? 'FREE');
+
+        $lines = [
+            '<b>SP NET MOD TOOL Pricing</b>',
+            'Current plan: ' . $this->escape($plan),
+            '',
+            '<b>Free</b>',
+            '- Core analytics + reward sheets',
+            '- Dashboard + CSV export',
+            '- Auto monthly reports + mid‑month progress',
+            '- Multi‑chat summary',
+            '- ChatKeeper/Combot CLI imports',
+            '',
+            '<b>Premium</b>',
+            '- Everything in Free',
+            '- Coaching tips + consistency score',
+            '- Team health (coverage gaps, workload balance, burnout risk)',
+            '- Executive summary + trend report',
+            '- PDF export for reward sheets',
+            '- Import wizard (browser upload)',
+            '- Owner notifications (DM reports, mid‑month alerts, congrats)',
+            '- Reward upgrades (max‑share cap, stability bonus, penalty decay)',
+            '',
+            '<b>Enterprise</b>',
+            '- Everything in Premium',
+            '- Custom onboarding + setup help',
+            '- White‑label branding',
+            '- Dedicated support + SLA',
+            '',
+            'Upgrade (owner only): /setplan premium 30',
+        ];
+
+        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+        if ($this->shouldLog('log_commands')) {
+            Logger::info('Pricing viewed for chat ' . $chatId);
         }
     }
 
@@ -1766,6 +1811,7 @@ class UpdateHandler
                 '/execsummary [YYYY-MM] [budget]',
                 '/archive',
                 '/premium (view premium benefits)',
+                '/pricing (tiers + features)',
                 '/setbudget &lt;amount&gt; [chat_id]',
                 '/settimezone &lt;Region/City&gt; [chat_id]',
                 '/setactivity &lt;gap_minutes&gt; &lt;floor_minutes&gt; [chat_id]',

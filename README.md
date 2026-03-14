@@ -75,6 +75,7 @@ Private chat commands:
 - `/plan`
 - `/setplan <free|premium> [days]` (owner only)
 - `/premium` (see premium benefits)
+- `/pricing` (tiers + features)
 - `/coach [YYYY-MM]` (premium)
 - `/health [YYYY-MM]` (premium)
 - `/trend [YYYY-MM] [budget]` (premium)
