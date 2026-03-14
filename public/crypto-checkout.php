@@ -115,9 +115,9 @@ body {
     justify-content: space-between;
     gap: 12px;
 }
-.brand-badge {
-    font-size: 10px;
-    letter-spacing: 0.2em;
+.brand-title {
+    font-size: 11px;
+    letter-spacing: 0.18em;
     text-transform: uppercase;
     color: #94a3b8;
 }
@@ -147,6 +147,9 @@ body {
 }
 .value.large {
     font-size: 22px;
+}
+.value.success {
+    color: #16a34a;
 }
 .pill {
     display: inline-flex;
@@ -258,6 +261,52 @@ body {
     color: #334155;
 }
 .muted { color: #64748b; }
+.timeline {
+    display: grid;
+    gap: 10px;
+    margin-top: 12px;
+}
+.timeline-item {
+    display: grid;
+    grid-template-columns: 16px 1fr;
+    gap: 10px;
+    align-items: flex-start;
+    font-size: 13px;
+    color: #334155;
+}
+.timeline-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    background: #e2e8f0;
+    margin-top: 3px;
+}
+.timeline-dot.active { background: #22c55e; }
+.notice {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 12px;
+    font-size: 12px;
+    color: #475569;
+}
+.checkmark {
+    width: 40px;
+    height: 40px;
+    border-radius: 999px;
+    background: #22c55e;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-weight: 900;
+    margin-bottom: 10px;
+}
+@media (max-width: 900px) {
+    .layout {
+        grid-template-columns: 1fr;
+    }
+}
 </style>
 </head>
 <body>
@@ -265,7 +314,7 @@ body {
     <div class="header">
         <div class="brand">
             <div>
-                <div class="brand-badge">DEMO CHECKOUT</div>
+                <div class="brand-title">Secure Checkout</div>
                 <h1>Crypto Checkout</h1>
             </div>
             <div class="chip">Powered by SP NET MOD TOOL</div>
@@ -273,87 +322,115 @@ body {
         <div class="meta">Order #<?php echo (int)$orderId; ?> · Created <?php echo htmlspecialchars($createdAt, ENT_QUOTES, 'UTF-8'); ?> UTC</div>
     </div>
 
-    <div class="card">
-        <?php if ($paid): ?>
-            <div class="label">Payment Complete</div>
-            <div class="value large">Thank you for your purchase.</div>
-            <div class="note">Your transaction was confirmed and processed successfully.</div>
-            <div class="divider"></div>
-            <div class="grid">
-                <div>
-                    <div class="label">Receipt</div>
-                    <div class="value"><?php echo htmlspecialchars($receiptId, ENT_QUOTES, 'UTF-8'); ?></div>
-                </div>
-                <div>
-                    <div class="label">Amount Paid</div>
-                    <div class="value"><?php echo $displayAmount; ?></div>
-                </div>
-                <div>
-                    <div class="label">Status</div>
-                    <div class="value"><span class="pill good">Completed</span></div>
-                </div>
-            </div>
-            <div class="divider"></div>
-        <?php endif; ?>
-        <div class="grid">
-            <div>
-                <div class="label">Amount Due</div>
-                <div class="value large"><?php echo $displayAmount; ?></div>
-                <div class="note">Network fee not included · Demo environment</div>
-            </div>
-            <div>
-                <div class="label">Network</div>
-                <div class="value"><?php echo htmlspecialchars($network, ENT_QUOTES, 'UTF-8'); ?></div>
-                <div class="note">Confirm chain before sending.</div>
-            </div>
-            <div>
-                <div class="label">Status</div>
-                <div class="value">
-                    <?php if ($paid): ?>
-                        <span class="pill good">Paid</span>
-                    <?php else: ?>
-                        <span class="pill <?php echo $expired ? 'warn' : 'info'; ?>"><?php echo $expired ? 'Expired' : 'Awaiting Payment'; ?></span>
-                    <?php endif; ?>
-                </div>
-            </div>
-        </div>
-        <div class="divider"></div>
-        <div class="qr-wrap">
-            <div class="qr" aria-hidden="true"></div>
-            <div>
-                <div class="label">Deposit Address</div>
-                <div class="address"><?php echo htmlspecialchars($address, ENT_QUOTES, 'UTF-8'); ?></div>
-        <div class="note">Send exactly <?php echo $displayAmount; ?> to this address.</div>
-        <div class="note">Expires in: <span class="timer" id="timer">--:--</span> · Expires at <?php echo htmlspecialchars($expiresAt, ENT_QUOTES, 'UTF-8'); ?> UTC</div>
-            </div>
-        </div>
-
-        <div class="actions">
-            <?php if ($testMode): ?>
-                <?php if (!$paid): ?>
-                    <form method="post">
-                        <button class="btn primary" type="submit">Done</button>
-                    </form>
+    <div class="layout">
+        <div>
+            <div class="card">
+                <?php if ($paid): ?>
+                    <div class="checkmark">✓</div>
+                    <div class="label">Payment Complete</div>
+                    <div class="value large success">Your transaction is confirmed.</div>
+                    <div class="note">Thank you for your purchase. A receipt has been generated below.</div>
+                    <div class="divider"></div>
+                    <div class="grid">
+                        <div>
+                            <div class="label">Receipt</div>
+                            <div class="value"><?php echo htmlspecialchars($receiptId, ENT_QUOTES, 'UTF-8'); ?></div>
+                        </div>
+                        <div>
+                            <div class="label">Amount Paid</div>
+                            <div class="value"><?php echo $displayAmount; ?></div>
+                        </div>
+                        <div>
+                            <div class="label">Status</div>
+                            <div class="value"><span class="pill good">Completed</span></div>
+                        </div>
+                    </div>
+                    <div class="divider"></div>
                 <?php endif; ?>
-                <a class="btn ghost" href="<?php echo htmlspecialchars($_SERVER['REQUEST_URI'], ENT_QUOTES, 'UTF-8'); ?>">Refresh</a>
-            <?php endif; ?>
-            <button class="btn dark" type="button" onclick="copyValue('<?php echo htmlspecialchars($address, ENT_QUOTES, 'UTF-8'); ?>')">Copy Address</button>
-            <button class="btn ghost" type="button" onclick="copyValue('<?php echo $displayAmount; ?>')">Copy Amount</button>
-        </div>
-        <div class="note">Transaction ID: <?php echo substr($txId, 0, 16); ?>…</div>
-    </div>
+                <div class="grid">
+                    <div>
+                        <div class="label">Amount Due</div>
+                        <div class="value large"><?php echo $displayAmount; ?></div>
+                        <div class="note">Network fee not included · Secure checkout</div>
+                    </div>
+                    <div>
+                        <div class="label">Network</div>
+                        <div class="value"><?php echo htmlspecialchars($network, ENT_QUOTES, 'UTF-8'); ?></div>
+                        <div class="note">Send only on <?php echo htmlspecialchars($network, ENT_QUOTES, 'UTF-8'); ?>.</div>
+                    </div>
+                    <div>
+                        <div class="label">Status</div>
+                        <div class="value">
+                            <?php if ($paid): ?>
+                                <span class="pill good">Paid</span>
+                            <?php else: ?>
+                                <span class="pill <?php echo $expired ? 'warn' : 'info'; ?>"><?php echo $expired ? 'Expired' : 'Awaiting Payment'; ?></span>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+                <div class="divider"></div>
+                <div class="qr-wrap">
+                    <div class="qr" aria-hidden="true"></div>
+                    <div>
+                        <div class="label">Deposit Address</div>
+                        <div class="address"><?php echo htmlspecialchars($address, ENT_QUOTES, 'UTF-8'); ?></div>
+                        <div class="note">Send exactly <?php echo $displayAmount; ?> to this address.</div>
+                        <div class="note">Expires in: <span class="timer" id="timer">--:--</span> · Expires at <?php echo htmlspecialchars($expiresAt, ENT_QUOTES, 'UTF-8'); ?> UTC</div>
+                    </div>
+                </div>
 
-    <div class="card">
-        <div class="label">Payment Steps</div>
-        <div class="steps">
-            <div class="step"><span class="dot">1</span><span>Copy the address and send the exact amount on <strong><?php echo htmlspecialchars($network, ENT_QUOTES, 'UTF-8'); ?></strong>.</span></div>
-            <div class="step"><span class="dot">2</span><span>Wait for confirmations (sandbox simulates this instantly).</span></div>
-            <div class="step"><span class="dot">3</span><span>Plan is applied automatically after payment confirmation.</span></div>
+                <div class="actions">
+                    <?php if ($testMode): ?>
+                        <?php if (!$paid): ?>
+                            <form method="post">
+                                <button class="btn primary" type="submit">Done</button>
+                            </form>
+                        <?php endif; ?>
+                        <a class="btn ghost" href="<?php echo htmlspecialchars($_SERVER['REQUEST_URI'], ENT_QUOTES, 'UTF-8'); ?>">Refresh</a>
+                    <?php endif; ?>
+                    <button class="btn dark" type="button" onclick="copyValue('<?php echo htmlspecialchars($address, ENT_QUOTES, 'UTF-8'); ?>')">Copy Address</button>
+                    <button class="btn ghost" type="button" onclick="copyValue('<?php echo $displayAmount; ?>')">Copy Amount</button>
+                </div>
+                <div class="note">Transaction ID: <?php echo substr($txId, 0, 16); ?>…</div>
+            </div>
+
+            <div class="card">
+                <div class="label">Payment Progress</div>
+                <div class="timeline">
+                    <div class="timeline-item">
+                        <span class="timeline-dot active"></span>
+                        <span>Payment created · Address generated for this order.</span>
+                    </div>
+                    <div class="timeline-item">
+                        <span class="timeline-dot <?php echo $paid ? 'active' : ''; ?>"></span>
+                        <span><?php echo $paid ? 'Payment confirmed' : 'Awaiting blockchain confirmations'; ?></span>
+                    </div>
+                    <div class="timeline-item">
+                        <span class="timeline-dot <?php echo $paid ? 'active' : ''; ?>"></span>
+                        <span><?php echo $paid ? 'Plan activated and receipt issued' : 'Plan activates after confirmation'; ?></span>
+                    </div>
+                </div>
+                <div class="divider"></div>
+                <div class="row"><span class="muted">Confirmations required</span><span>3</span></div>
+                <div class="row"><span class="muted">Estimated arrival</span><span>~2–5 min</span></div>
+                <div class="row"><span class="muted">Order status</span><span><?php echo htmlspecialchars(strtoupper($status), ENT_QUOTES, 'UTF-8'); ?></span></div>
+            </div>
         </div>
-        <div class="divider"></div>
-        <div class="row"><span class="muted">Confirmations required</span><span>3</span></div>
-        <div class="row"><span class="muted">Estimated arrival</span><span>~2–5 min</span></div>
-        <div class="row"><span class="muted">Order status</span><span><?php echo htmlspecialchars(strtoupper($status), ENT_QUOTES, 'UTF-8'); ?></span></div>
+
+        <div>
+            <div class="summary-card">
+                <div class="label">Order Summary</div>
+                <div class="value large"><?php echo $displayAmount; ?></div>
+                <div class="note">Checkout for chat <?php echo (int)($order['chat_id'] ?? 0); ?></div>
+                <div class="divider"></div>
+                <div class="row"><span class="muted">Network fee (est.)</span><span>0.80 <?php echo htmlspecialchars($currency, ENT_QUOTES, 'UTF-8'); ?></span></div>
+                <div class="row"><span class="muted">Processing time</span><span>2–5 minutes</span></div>
+                <div class="row"><span class="muted">Receipt</span><span><?php echo htmlspecialchars($receiptId, ENT_QUOTES, 'UTF-8'); ?></span></div>
+                <div class="divider"></div>
+                <div class="notice">Only send <?php echo htmlspecialchars($currency, ENT_QUOTES, 'UTF-8'); ?> via <?php echo htmlspecialchars($network, ENT_QUOTES, 'UTF-8'); ?>. Sending other assets may result in permanent loss.</div>
+            </div>
+        </div>
     </div>
 </div>
 <script>
@@ -379,3 +456,18 @@ function copyValue(value) {
 </script>
 </body>
 </html>
+.layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.7fr);
+    gap: 18px;
+}
+.summary-card {
+    background: #0f172a;
+    color: #e2e8f0;
+    border-radius: 16px;
+    padding: 18px;
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.15);
+}
+.summary-card .label { color: #94a3b8; }
+.summary-card .value { color: #fff; }
+.summary-card .divider { background: rgba(148, 163, 184, 0.2); }
