@@ -1134,7 +1134,7 @@ class UpdateHandler
         $checkoutUrl = $baseUrl . '/crypto-checkout.php?token=' . urlencode((string)$token) . '&order=' . urlencode((string)$orderId);
 
         $lines = [
-            '<b>Crypto Test Checkout Created</b>',
+            '<b>Crypto Checkout Created</b>',
             'Order: ' . $orderId,
             'Amount: ' . number_format($amount, 2) . ' ' . $this->escape($currency),
             'Network: ' . $this->escape($network),

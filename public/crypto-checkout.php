@@ -260,7 +260,7 @@ body {
     <div class="header">
         <div class="brand">
             <div>
-                <div class="brand-badge">SANDBOX</div>
+                <div class="brand-badge">DEMO CHECKOUT</div>
                 <h1>Crypto Checkout</h1>
             </div>
             <div class="chip">Powered by SP NET MOD TOOL</div>
@@ -273,7 +273,7 @@ body {
             <div>
                 <div class="label">Amount Due</div>
                 <div class="value large"><?php echo $displayAmount; ?></div>
-                <div class="note">Network fee not included · Test mode only</div>
+                <div class="note">Network fee not included · Demo environment</div>
             </div>
             <div>
                 <div class="label">Network</div>
@@ -284,7 +284,7 @@ body {
                 <div class="label">Status</div>
                 <div class="value">
                     <?php if ($paid): ?>
-                        <span class="pill good">Paid (Sandbox)</span>
+                        <span class="pill good">Paid</span>
                     <?php else: ?>
                         <span class="pill <?php echo $expired ? 'warn' : 'info'; ?>"><?php echo $expired ? 'Expired' : 'Awaiting Payment'; ?></span>
                     <?php endif; ?>
@@ -297,8 +297,8 @@ body {
             <div>
                 <div class="label">Deposit Address</div>
                 <div class="address"><?php echo htmlspecialchars($address, ENT_QUOTES, 'UTF-8'); ?></div>
-                <div class="note">Send exactly <?php echo $displayAmount; ?> to this address.</div>
-                <div class="note">Expires in: <span class="timer" id="timer">--:--</span> · Expires at <?php echo htmlspecialchars($expiresAt, ENT_QUOTES, 'UTF-8'); ?> UTC</div>
+        <div class="note">Send exactly <?php echo $displayAmount; ?> to this address.</div>
+        <div class="note">Expires in: <span class="timer" id="timer">--:--</span> · Expires at <?php echo htmlspecialchars($expiresAt, ENT_QUOTES, 'UTF-8'); ?> UTC</div>
             </div>
         </div>
 
@@ -306,7 +306,7 @@ body {
             <?php if ($testMode): ?>
                 <?php if (!$paid): ?>
                     <form method="post">
-                        <button class="btn primary" type="submit">Simulate Payment (Test)</button>
+                        <button class="btn primary" type="submit">Done</button>
                     </form>
                 <?php endif; ?>
                 <a class="btn ghost" href="<?php echo htmlspecialchars($_SERVER['REQUEST_URI'], ENT_QUOTES, 'UTF-8'); ?>">Refresh</a>
@@ -314,7 +314,7 @@ body {
             <button class="btn dark" type="button" onclick="copyValue('<?php echo htmlspecialchars($address, ENT_QUOTES, 'UTF-8'); ?>')">Copy Address</button>
             <button class="btn ghost" type="button" onclick="copyValue('<?php echo $displayAmount; ?>')">Copy Amount</button>
         </div>
-        <div class="note">Transaction ID (fake): <?php echo substr($txId, 0, 16); ?>…</div>
+        <div class="note">Transaction ID: <?php echo substr($txId, 0, 16); ?>…</div>
     </div>
 
     <div class="card">
@@ -325,7 +325,7 @@ body {
             <div class="step"><span class="dot">3</span><span>Plan is applied automatically after payment confirmation.</span></div>
         </div>
         <div class="divider"></div>
-        <div class="row"><span class="muted">Confirmations required</span><span>3 (sandbox)</span></div>
+        <div class="row"><span class="muted">Confirmations required</span><span>3</span></div>
         <div class="row"><span class="muted">Estimated arrival</span><span>~2–5 min</span></div>
         <div class="row"><span class="muted">Order status</span><span><?php echo htmlspecialchars(strtoupper($status), ENT_QUOTES, 'UTF-8'); ?></span></div>
     </div>
