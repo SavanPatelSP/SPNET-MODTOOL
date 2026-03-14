@@ -23,10 +23,13 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
 4. Run the user settings migration:
    - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/003_user_settings.sql`
    - If you use MariaDB CLI: `mariadb -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/003_user_settings.sql`
-5. Copy config overrides:
+5. Run the external stats migration:
+   - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/004_external_user_stats.sql`
+   - If you use MariaDB CLI: `mariadb -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/004_external_user_stats.sql`
+6. Copy config overrides:
    - `cp /Users/savanpatel/Documents/SPNET-MODTOOL/config.example.php /Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php`
-6. Edit `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` with your bot token and DB creds.
-7. Run in long-poll mode:
+7. Edit `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` with your bot token and DB creds.
+8. Run in long-poll mode:
    - `php /Users/savanpatel/Documents/SPNET-MODTOOL/bin/poll.php`
 
 ## Commands
@@ -112,3 +115,9 @@ function doPost(e) {
 Run this script hourly via cron (or a scheduler):
 - `php /Users/savanpatel/Documents/SPNET-MODTOOL/bin/run-scheduled.php`
 It sends the previous month’s report on the configured day/hour in the chat’s timezone.
+
+## Import ChatKeeper CSV (for backfill)
+If you have a ChatKeeper export (like `analysis_users.csv`), import it with:
+- `php /Users/savanpatel/Documents/SPNET-MODTOOL/bin/import-chatkeeper.php --file=/path/analysis_users.csv --chat=-1001234567890 --month=YYYY-MM`
+Add `--replace` to overwrite an existing import for the same month.
+Imported message counts are added to the monthly message total for each mod.

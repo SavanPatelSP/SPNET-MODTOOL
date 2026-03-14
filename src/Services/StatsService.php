@@ -106,6 +106,8 @@ class StatsService
             $membershipsByUser[$row['user_id']][] = $row;
         }
 
+        $externalStats = $this->getExternalStatsMap($chatId, $range['month']);
+
         $weights = $this->config['score_weights'] ?? [];
         $gap = (int)($settings['active_gap_minutes'] ?? $this->config['active_gap_minutes'] ?? 5);
         $floor = (int)($settings['active_floor_minutes'] ?? $this->config['active_floor_minutes'] ?? 1);
@@ -116,6 +118,8 @@ class StatsService
             $timestamps = $messagesByUser[$userId] ?? [];
 
             $messageCount = count($timestamps);
+            $externalMessageCount = (int)($externalStats[$userId]['messages'] ?? 0);
+            $messageCount += $externalMessageCount;
             $activeMinutes = $this->computeActiveMinutes($timestamps, $gap, $floor);
             $daysActive = $this->computeDaysActive($timestamps, $timezone);
             $peakHour = $this->computePeakHour($timestamps, $timezone);
@@ -144,6 +148,7 @@ class StatsService
                 'last_name' => $mod['last_name'],
                 'display_name' => $this->displayName($mod),
                 'messages' => $messageCount,
+                'external_messages' => $externalMessageCount,
                 'warnings' => $warnings,
                 'mutes' => $mutes,
                 'bans' => $bans,
@@ -159,6 +164,29 @@ class StatsService
         usort($stats, fn($a, $b) => $b['score'] <=> $a['score']);
 
         return $stats;
+    }
+
+    private function getExternalStatsMap(int|string $chatId, string $month): array
+    {
+        $rows = $this->db->fetchAll(
+            'SELECT user_id, SUM(messages) AS messages, SUM(replies) AS replies, SUM(reputation_take) AS reputation_take
+             FROM external_user_stats
+             WHERE chat_id = ? AND month = ?
+             GROUP BY user_id',
+            [$chatId, $month]
+        );
+
+        $map = [];
+        foreach ($rows as $row) {
+            $userId = (int)$row['user_id'];
+            $map[$userId] = [
+                'messages' => (int)($row['messages'] ?? 0),
+                'replies' => (int)($row['replies'] ?? 0),
+                'reputation_take' => (int)($row['reputation_take'] ?? 0),
+            ];
+        }
+
+        return $map;
     }
 
     private function getMods(int|string $chatId): array
