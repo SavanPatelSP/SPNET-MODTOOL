@@ -81,6 +81,11 @@ class UpdateHandler
 
     public function handleUpdate(array $update): void
     {
+        if (isset($update['pre_checkout_query'])) {
+            $this->handlePreCheckoutQuery($update['pre_checkout_query']);
+            return;
+        }
+
         if (isset($update['message'])) {
             $this->handleMessage($update['message']);
             return;
@@ -133,6 +138,11 @@ class UpdateHandler
             $this->upsertUser($member);
             $this->ensureChatMember($chatId, $member['id']);
             $this->recordMembershipLeave($chatId, $member['id'], $message['date']);
+        }
+
+        if (!empty($message['successful_payment'])) {
+            $this->handleSuccessfulPayment($message);
+            return;
         }
 
         if ($this->isRegularMessage($message)) {
@@ -1040,6 +1050,13 @@ class UpdateHandler
         $days = isset($tier['days']) ? (int)$tier['days'] : null;
         $currency = $tier['currency'] ?? ($method === 'crypto' ? 'USDT' : 'STARS');
 
+        $paymentsConfig = $this->config['payments'] ?? [];
+        $starsConfig = $paymentsConfig['stars'] ?? [];
+        if ($method === 'stars' && !empty($starsConfig['enabled'])) {
+            $this->sendStarsInvoice($responseChatId, $userId, (int)$targetChatId, $amount, $plan, $days);
+            return;
+        }
+
         if ($plan) {
             $this->subscriptions->setPlan($targetChatId, $plan, $days);
         }
@@ -1088,6 +1105,169 @@ class UpdateHandler
             'At: ' . $this->escape($latest['created_at'] ?? ''),
         ];
         $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+    }
+
+    private function handlePreCheckoutQuery(array $query): void
+    {
+        $id = $query['id'] ?? null;
+        if (!$id) {
+            return;
+        }
+        $currency = $query['currency'] ?? '';
+        $paymentsConfig = $this->config['payments'] ?? [];
+        $starsConfig = $paymentsConfig['stars'] ?? [];
+        if (empty($starsConfig['enabled'])) {
+            $this->tg->answerPreCheckoutQuery($id, false, 'Stars payments are disabled.');
+            return;
+        }
+        if ($currency !== 'XTR') {
+            $this->tg->answerPreCheckoutQuery($id, false, 'Only Telegram Stars are supported.');
+            return;
+        }
+        $this->tg->answerPreCheckoutQuery($id, true);
+    }
+
+    private function handleSuccessfulPayment(array $message): void
+    {
+        $payment = $message['successful_payment'] ?? [];
+        $currency = $payment['currency'] ?? '';
+        $amount = (float)($payment['total_amount'] ?? 0);
+        $payload = $payment['invoice_payload'] ?? '';
+        $userId = $message['from']['id'] ?? null;
+        $chatId = $message['chat']['id'] ?? null;
+        if (!$userId || !$chatId) {
+            return;
+        }
+
+        $method = $currency === 'XTR' ? 'stars' : 'payment';
+        $parsed = $this->parseStarsPayload($payload);
+        $targetChatId = $parsed['chat_id'] ?? null;
+        $plan = $parsed['plan'] ?? null;
+        $days = $parsed['days'] ?? null;
+
+        if (!$plan) {
+            $tier = $this->payments->selectTier($method, $amount);
+            $plan = $tier['plan'] ?? null;
+            $days = isset($tier['days']) ? (int)$tier['days'] : null;
+        }
+
+        if (!$targetChatId) {
+            $defaultChatId = $this->userSettings->getDefaultChatId($userId);
+            if ($defaultChatId !== null) {
+                $targetChatId = (int)$defaultChatId;
+            }
+        }
+
+        if ($plan && $targetChatId) {
+            $this->subscriptions->setPlan($targetChatId, $plan, $days);
+        }
+
+        $status = $this->payments->isTestMode() ? 'test' : 'successful';
+        $this->payments->record((int)($targetChatId ?? $chatId), $userId, $method, $amount, (string)$currency, $status, $plan, $days, [
+            'payload' => $payload,
+        ]);
+        $this->audit->log('payment_success', $userId, $targetChatId ? (int)$targetChatId : null, [
+            'method' => $method,
+            'amount' => $amount,
+            'currency' => $currency,
+            'plan' => $plan,
+            'days' => $days,
+        ]);
+
+        $lines = [
+            '<b>Payment received</b>',
+            'Method: ' . strtoupper($method),
+            'Amount: ' . number_format($amount, 2) . ' ' . $this->escape((string)$currency),
+        ];
+        if ($plan && $targetChatId) {
+            $lines[] = 'Applied to chat: ' . $targetChatId;
+            $lines[] = 'Plan: ' . strtoupper($plan) . ($days ? (' for ' . $days . ' days') : '');
+        } else {
+            $lines[] = 'Plan not applied. Set /usechat and try again.';
+        }
+        $this->tg->sendMessage($chatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+    }
+
+    private function sendStarsInvoice(int|string $responseChatId, int|string $userId, int $chatId, float $amount, ?string $plan, ?int $days): void
+    {
+        $paymentsConfig = $this->config['payments'] ?? [];
+        $starsConfig = $paymentsConfig['stars'] ?? [];
+        $title = $starsConfig['title'] ?? 'SP NET MOD TOOL';
+        $description = $starsConfig['description'] ?? 'Telegram Stars test purchase.';
+        $sandbox = !empty($starsConfig['sandbox']);
+        $testEnv = !empty(($this->config['telegram']['test_environment'] ?? false));
+
+        if ($sandbox && !$testEnv) {
+            $this->tg->sendMessage($responseChatId, 'Stars sandbox requires telegram.test_environment=true and a test bot token.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $amountInt = max(1, (int)round($amount));
+        $payload = $this->buildStarsPayload($chatId, $plan, $days, $amountInt);
+
+        $params = [
+            'chat_id' => $responseChatId,
+            'title' => $title,
+            'description' => $description,
+            'payload' => $payload,
+            'currency' => 'XTR',
+            'prices' => json_encode([
+                ['label' => 'Stars', 'amount' => $amountInt],
+            ]),
+            'provider_token' => '',
+        ];
+
+        $resp = $this->tg->sendInvoice($params);
+        if (!($resp['ok'] ?? false)) {
+            $this->tg->sendMessage($responseChatId, 'Failed to send Stars invoice. Check bot token + test environment.', ['parse_mode' => 'HTML']);
+            if ($this->shouldLog('log_commands')) {
+                Logger::error('sendInvoice failed: ' . ($resp['description'] ?? 'unknown'));
+            }
+            return;
+        }
+
+        $this->audit->log('stars_invoice_sent', $userId, $chatId, [
+            'amount' => $amountInt,
+            'plan' => $plan,
+            'days' => $days,
+        ]);
+    }
+
+    private function buildStarsPayload(int $chatId, ?string $plan, ?int $days, int $amount): string
+    {
+        $plan = $plan ?: 'free';
+        $days = $days ?: 0;
+        $payload = 'stars|' . $chatId . '|' . $plan . '|' . $days . '|' . $amount;
+        if (strlen($payload) > 120) {
+            $payload = 'stars|' . $chatId . '|' . $amount;
+        }
+        return $payload;
+    }
+
+    private function parseStarsPayload(string $payload): ?array
+    {
+        if (strpos($payload, 'stars|') !== 0) {
+            return null;
+        }
+        $parts = explode('|', $payload);
+        if (count($parts) < 3) {
+            return null;
+        }
+        $chatId = isset($parts[1]) ? (int)$parts[1] : null;
+        $plan = $parts[2] ?? null;
+        $days = isset($parts[3]) ? (int)$parts[3] : null;
+        $amount = isset($parts[4]) ? (int)$parts[4] : null;
+        if ($plan !== null && is_numeric($plan)) {
+            $amount = (int)$plan;
+            $plan = null;
+            $days = null;
+        }
+        return [
+            'chat_id' => $chatId,
+            'plan' => $plan,
+            'days' => $days,
+            'amount' => $amount,
+        ];
     }
 
     private function handleCoach(int|string $responseChatId, int|string $chatId, string $args): void
@@ -2342,6 +2522,7 @@ class UpdateHandler
             '<code>/buy_stars_test 500</code>',
             '<code>/buy_crypto_test 25</code>',
             '<code>/paystatus</code>',
+            'Stars sandbox requires telegram.test_environment=true + a test bot token.',
             '',
             '<b>Premium insights</b>',
             '<code>/coach 2026-02</code>',

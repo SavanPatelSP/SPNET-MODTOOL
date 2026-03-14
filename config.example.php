@@ -141,7 +141,7 @@ return [
         'limit' => 50,
         'sleep_ms' => 0,
         'error_sleep_ms' => 1000,
-        'allowed_updates' => ['message', 'chat_member'],
+        'allowed_updates' => ['message', 'chat_member', 'pre_checkout_query'],
     ],
 
     // Telegram network options (optional)
@@ -150,6 +150,10 @@ return [
         'dns_servers' => null,
         // 'v4' or 'v6' if needed
         'ip_resolve' => null,
+        // Optional custom API root (e.g. local Bot API server)
+        'api_root' => null,
+        // Telegram test environment (Stars sandbox)
+        'test_environment' => false,
     ],
 
     // Auto report defaults (used when chat settings are first created)
@@ -201,6 +205,12 @@ return [
     // Payments (test mode for Telegram Stars / Crypto simulation)
     'payments' => [
         'test_mode' => true,
+        'stars' => [
+            'enabled' => true,
+            'sandbox' => true,
+            'title' => 'SP NET MOD TOOL Premium',
+            'description' => 'Test purchase for SP NET MOD TOOL (Stars sandbox).',
+        ],
         'stars_tiers' => [
             ['min' => 500, 'plan' => 'premium', 'days' => 30],
             ['min' => 1500, 'plan' => 'enterprise', 'days' => 30],

@@ -268,6 +268,7 @@ http://127.0.0.1:8000/import.php?token=YOUR_TOKEN
 /paystatus
 ```
 Edit `payments` tiers in `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` to map purchases to plans.
+For the Stars sandbox UI, enable `telegram.test_environment=true` and use a Telegram test bot token.
 
 ### 16) Export to Google Sheets
 ```text

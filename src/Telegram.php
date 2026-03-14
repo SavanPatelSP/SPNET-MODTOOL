@@ -11,7 +11,11 @@ class Telegram
     public function __construct(string $token, array $options = [])
     {
         $this->token = $token;
-        $this->apiUrl = 'https://api.telegram.org/bot' . $token . '/';
+        $apiRoot = $options['api_root'] ?? 'https://api.telegram.org';
+        $apiRoot = rtrim((string)$apiRoot, '/');
+        $testEnv = !empty($options['test_environment']);
+        $suffix = $testEnv ? '/test/' : '/';
+        $this->apiUrl = $apiRoot . '/bot' . $token . $suffix;
         $this->options = $options;
     }
 
@@ -89,6 +93,23 @@ class Telegram
             Logger::error('sendDocument failed: ' . ($resp['description'] ?? 'unknown'));
         }
         return $resp;
+    }
+
+    public function sendInvoice(array $params): array
+    {
+        return $this->call('sendInvoice', $params);
+    }
+
+    public function answerPreCheckoutQuery(string $preCheckoutQueryId, bool $ok, ?string $errorMessage = null): array
+    {
+        $params = [
+            'pre_checkout_query_id' => $preCheckoutQueryId,
+            'ok' => $ok,
+        ];
+        if (!$ok && $errorMessage) {
+            $params['error_message'] = $errorMessage;
+        }
+        return $this->call('answerPreCheckoutQuery', $params);
     }
 
     public function getChatMember(int|string $chatId, int|string $userId): array

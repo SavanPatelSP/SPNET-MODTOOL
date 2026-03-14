@@ -44,12 +44,17 @@ class PaymentService
 
     public function recordTest(int|string $chatId, int|string $userId, string $method, float $amount, string $currency, ?string $plan, ?int $days, array $meta = []): void
     {
+        $this->record($chatId, $userId, $method, $amount, $currency, 'test', $plan, $days, $meta);
+    }
+
+    public function record(int|string $chatId, int|string $userId, string $method, float $amount, string $currency, string $status, ?string $plan, ?int $days, array $meta = []): void
+    {
         $now = gmdate('Y-m-d H:i:s');
         $payload = $meta ? json_encode($meta, JSON_UNESCAPED_UNICODE) : null;
         $this->db->exec(
             'INSERT INTO payments (chat_id, user_id, method, amount, currency, status, plan, days, meta, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [(int)$chatId, (int)$userId, $method, $amount, $currency, 'test', $plan, $days, $payload, $now]
+            [(int)$chatId, (int)$userId, $method, $amount, $currency, $status, $plan, $days, $payload, $now]
         );
     }
 
