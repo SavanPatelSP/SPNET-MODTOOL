@@ -48,7 +48,8 @@ class SubscriptionService
         }
 
         $sub = $this->get($chatId);
-        if (($sub['plan'] ?? 'free') !== 'premium') {
+        $plan = strtolower((string)($sub['plan'] ?? 'free'));
+        if (!in_array($plan, ['premium', 'enterprise'], true)) {
             return false;
         }
         if (($sub['status'] ?? 'active') !== 'active') {
@@ -64,7 +65,7 @@ class SubscriptionService
     public function setPlan(int|string $chatId, string $plan, ?int $days = null): array
     {
         $plan = strtolower(trim($plan));
-        if (!in_array($plan, ['free', 'premium'], true)) {
+        if (!in_array($plan, ['free', 'premium', 'enterprise'], true)) {
             $plan = 'free';
         }
 

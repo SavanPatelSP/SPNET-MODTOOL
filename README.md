@@ -55,6 +55,7 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
 13. Copy config overrides:
    - `cp /Users/savanpatel/Documents/SPNET-MODTOOL/config.example.php /Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php`
 14. Edit `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` with your bot token and DB creds.
+    - Optional: add `owner_user_ids` and `manager_user_ids` for staff access.
 15. Run in long-poll mode:
    - `php /Users/savanpatel/Documents/SPNET-MODTOOL/bin/poll.php`
 
@@ -74,7 +75,8 @@ Private chat commands:
 - `/exportgsheet [chat_id] [YYYY-MM] [budget]`
 - `/summary [YYYY-MM] [budget]` (multi-chat summary)
 - `/plan`
-- `/setplan <free|premium> [days]` (owner only)
+- `/setplan <free|premium|enterprise> [days]` (owner only)
+- `/giftplan <chat_id> <free|premium|enterprise> [days] [note]` (manager/owner)
 - `/premium` (see premium benefits)
 - `/pricing` (tiers + features)
 - `/coach [YYYY-MM]` (premium)

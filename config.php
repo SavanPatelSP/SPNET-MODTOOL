@@ -22,6 +22,7 @@ $envMap = [
     'DASHBOARD_CHAT_ID' => ['dashboard', 'default_chat_id'],
     'GSHEETS_WEBHOOK_URL' => ['google_sheets', 'webhook_url'],
     'OWNER_USER_IDS' => ['owner_user_ids'],
+    'MANAGER_USER_IDS' => ['manager_user_ids'],
 ];
 
 foreach ($envMap as $envKey => $path) {
@@ -30,6 +31,9 @@ foreach ($envMap as $envKey => $path) {
         continue;
     }
     if ($envKey === 'OWNER_USER_IDS') {
+        $value = array_values(array_filter(array_map('trim', explode(',', $value))));
+    }
+    if ($envKey === 'MANAGER_USER_IDS') {
         $value = array_values(array_filter(array_map('trim', explode(',', $value))));
     }
     $ref = &$base;

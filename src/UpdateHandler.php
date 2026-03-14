@@ -194,7 +194,7 @@ class UpdateHandler
             'usechat', 'modadd', 'modremove', 'modlist',
             'plan', 'setplan', 'coach', 'health', 'trend', 'execsummary', 'archive',
             'rosteradd', 'rosterremove', 'rosterlist', 'rosterrole',
-            'premium', 'benefits', 'pricing', 'guide',
+            'premium', 'benefits', 'pricing', 'guide', 'giftplan', 'grantplan',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
 
@@ -221,6 +221,11 @@ class UpdateHandler
 
             if ($command === 'guide') {
                 $this->handleGuide($chatId);
+                return;
+            }
+
+            if (in_array($command, ['giftplan', 'grantplan'], true)) {
+                $this->handleGiftPlan($chatId, $args, $userId);
                 return;
             }
 
@@ -711,6 +716,7 @@ class UpdateHandler
             'Status: ' . $this->escape($status),
             'Expires: ' . ($expires ? $this->escape($expires) : 'never'),
             'Tip: owners can upgrade with /setplan premium 30',
+            'Managers can gift with /giftplan &lt;chat_id&gt; premium 30',
         ];
         $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_reports')) {
@@ -728,7 +734,7 @@ class UpdateHandler
         $plan = $parts[0] ?? '';
         $days = isset($parts[1]) && is_numeric($parts[1]) ? (int)$parts[1] : null;
         if ($plan === '') {
-            $this->tg->sendMessage($responseChatId, 'Usage: /setplan &lt;free|premium&gt; [days]', ['parse_mode' => 'HTML']);
+            $this->tg->sendMessage($responseChatId, 'Usage: /setplan &lt;free|premium|enterprise&gt; [days]', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -740,6 +746,52 @@ class UpdateHandler
         $this->tg->sendMessage($responseChatId, $msg, ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_commands')) {
             Logger::info('Plan updated for chat ' . $chatId . ' -> ' . strtoupper($sub['plan']));
+        }
+    }
+
+    private function handleGiftPlan(int|string $responseChatId, string $args, int|string $userId): void
+    {
+        if (!$this->isManager($userId)) {
+            $this->tg->sendMessage($responseChatId, 'Only bot managers or owners can gift plans.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $tokens = preg_split('/\\s+/', trim($args));
+        $chatToken = $tokens[0] ?? '';
+        $plan = $tokens[1] ?? '';
+        if ($chatToken === '' || $plan === '') {
+            $this->tg->sendMessage($responseChatId, 'Usage: /giftplan &lt;chat_id&gt; &lt;free|premium|enterprise&gt; [days] [note]', ['parse_mode' => 'HTML']);
+            return;
+        }
+        if (!preg_match('/^-?\\d+$/', $chatToken)) {
+            $this->tg->sendMessage($responseChatId, 'Chat id must be numeric. Example: /giftplan -1001234567890 premium 30', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $chatId = (int)$chatToken;
+        $days = null;
+        $note = '';
+        $rest = array_slice($tokens, 2);
+        if (!empty($rest) && is_numeric($rest[0])) {
+            $days = (int)$rest[0];
+            $rest = array_slice($rest, 1);
+        }
+        if (!empty($rest)) {
+            $note = trim(implode(' ', $rest));
+        }
+
+        $sub = $this->subscriptions->setPlan($chatId, $plan, $days);
+        $expires = $sub['expires_at'] ?? null;
+        $msg = 'Gifted plan: ' . strtoupper($sub['plan'] ?? $plan) . ' for chat ' . $chatId;
+        if ($expires) {
+            $msg .= ' (expires ' . $this->escape($expires) . ')';
+        }
+        if ($note !== '') {
+            $msg .= "\nNote: " . $this->escape($note);
+        }
+        $this->tg->sendMessage($responseChatId, $msg, ['parse_mode' => 'HTML']);
+        if ($this->shouldLog('log_commands')) {
+            Logger::info('Gifted plan ' . $plan . ' chat ' . $chatId . ' days ' . ($days ?? 0) . ' by ' . $userId);
         }
     }
 
@@ -1637,6 +1689,24 @@ class UpdateHandler
         return false;
     }
 
+    private function isManager(int|string $userId): bool
+    {
+        if ($this->isOwner($userId)) {
+            return true;
+        }
+        $managers = $this->config['manager_user_ids'] ?? [];
+        if (!is_array($managers)) {
+            return false;
+        }
+        $userId = (int)$userId;
+        foreach ($managers as $manager) {
+            if ((int)$manager === $userId) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private function isMod(int|string $chatId, int|string $userId): bool
     {
         $row = $this->db->fetch('SELECT is_mod FROM chat_members WHERE chat_id = ? AND user_id = ?', [$chatId, $userId]);
@@ -1817,7 +1887,8 @@ class UpdateHandler
                 '/exportgsheet [chat_id] [YYYY-MM] [budget]',
                 '/summary [YYYY-MM] [budget]',
                 '/plan',
-                '/setplan &lt;free|premium&gt; [days] (owner only)',
+                '/setplan &lt;free|premium|enterprise&gt; [days] (owner only)',
+                '/giftplan &lt;chat_id&gt; &lt;free|premium|enterprise&gt; [days] [note] (manager/owner)',
                 '/coach [YYYY-MM]',
                 '/health [YYYY-MM]',
                 '/trend [YYYY-MM] [budget]',

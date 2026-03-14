@@ -15,6 +15,8 @@ return [
 
     // Optional: always-allowed user IDs (comma-separated via OWNER_USER_IDS env)
     'owner_user_ids' => [],
+    // Optional: manager/supervisor user IDs (comma-separated via MANAGER_USER_IDS env)
+    'manager_user_ids' => [],
 
     // Database settings
     'db' => [
