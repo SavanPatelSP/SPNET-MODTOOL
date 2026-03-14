@@ -194,6 +194,7 @@ class UpdateHandler
             'usechat', 'modadd', 'modremove', 'modlist',
             'plan', 'setplan', 'coach', 'health', 'trend', 'execsummary', 'archive',
             'rosteradd', 'rosterremove', 'rosterlist', 'rosterrole',
+            'premium', 'benefits',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
 
@@ -307,6 +308,10 @@ class UpdateHandler
                         return;
                     case 'rosterrole':
                         $this->handleRosterRole($chatId, $targetChatId, $cleanArgs, $message);
+                        return;
+                    case 'premium':
+                    case 'benefits':
+                        $this->handlePremiumBenefits($chatId, $targetChatId);
                         return;
                 }
             }
@@ -884,6 +889,31 @@ class UpdateHandler
             $lines[] = $row['month'] . ' | ' . $row['report_type'] . ' | ' . basename($row['file_path']);
         }
         $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+    }
+
+    private function handlePremiumBenefits(int|string $responseChatId, int|string $chatId): void
+    {
+        $sub = $this->subscriptions->get($chatId);
+        $plan = strtoupper($sub['plan'] ?? 'FREE');
+        $lines = [
+            '<b>Premium Benefits</b>',
+            'Current plan: ' . $this->escape($plan),
+            '',
+            'Premium unlocks:',
+            '- Coaching tips + consistency score',
+            '- Team health (coverage gaps, workload balance, burnout risk)',
+            '- Executive summary + trend report',
+            '- PDF export for reward sheets',
+            '- Import wizard (ChatKeeper + Combot CSVs)',
+            '- Owner notifications (auto report DM, mid-month alerts, congrats)',
+            '- Reward upgrades (max-share cap, stability bonus, penalty decay)',
+            '',
+            'Upgrade (owner only): /setplan premium 30',
+        ];
+        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+        if ($this->shouldLog('log_commands')) {
+            Logger::info('Premium benefits viewed for chat ' . $chatId);
+        }
     }
 
     private function handleRosterAdd(int|string $responseChatId, int|string $chatId, string $args, array $message): void
@@ -1735,6 +1765,7 @@ class UpdateHandler
                 '/trend [YYYY-MM] [budget]',
                 '/execsummary [YYYY-MM] [budget]',
                 '/archive',
+                '/premium (view premium benefits)',
                 '/setbudget &lt;amount&gt; [chat_id]',
                 '/settimezone &lt;Region/City&gt; [chat_id]',
                 '/setactivity &lt;gap_minutes&gt; &lt;floor_minutes&gt; [chat_id]',
