@@ -13,6 +13,7 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
 - Approval workflow + audit log exports
 - Role multipliers for senior/lead moderators
 - Insights: most active, most improved, most consistent, peak hour
+- Test payments (Telegram Stars / crypto)
 - Live dashboard page (auto-refresh)
 - CSV export + Google Sheets webhook export
 - Auto-scheduled monthly reports
@@ -60,11 +61,13 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
    - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/012_report_approvals.sql`
 14. Run the audit log migration:
    - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/013_audit_log.sql`
-15. Copy config overrides:
+15. Run the payments migration:
+   - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/014_payments.sql`
+16. Copy config overrides:
    - `cp /Users/savanpatel/Documents/SPNET-MODTOOL/config.example.php /Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php`
-16. Edit `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` with your bot token and DB creds.
+17. Edit `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` with your bot token and DB creds.
     - Optional: add `owner_user_ids` and `manager_user_ids` for staff access.
-17. Run in long-poll mode:
+18. Run in long-poll mode:
    - `php /Users/savanpatel/Documents/SPNET-MODTOOL/bin/poll.php`
 
 ## Commands
@@ -92,6 +95,9 @@ Private chat commands:
 - `/auditlogcsv <chat_id> [limit]` (manager/owner)
 - `/premium` (see premium benefits)
 - `/pricing` (tiers + features)
+- `/buy_stars_test <amount> [chat_id]` (manager/owner test purchase)
+- `/buy_crypto_test <amount> [chat_id]` (manager/owner test purchase)
+- `/paystatus` (latest payment)
 - `/coach [YYYY-MM]` (premium)
 - `/health [YYYY-MM]` (premium)
 - `/trend [YYYY-MM] [budget]` (premium)
@@ -255,12 +261,20 @@ http://127.0.0.1:8000/import.php?token=YOUR_TOKEN
 /auditlogcsv 200
 ```
 
-### 15) Export to Google Sheets
+### 15) Test payments (Telegram Stars + crypto)
+```text
+/buy_stars_test 500
+/buy_crypto_test 25
+/paystatus
+```
+Edit `payments` tiers in `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` to map purchases to plans.
+
+### 16) Export to Google Sheets
 ```text
 /exportgsheet 2026-02 5000
 ```
 
-### 16) Troubleshooting
+### 17) Troubleshooting
 - Bot not responding: check DNS/network on the host, then run `curl -I https://api.telegram.org`.
 - "No permission": ensure you are an admin in that group or add your user id to `owner_user_ids` in `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php`.
 - "No mods are added": run `/modadd` first.

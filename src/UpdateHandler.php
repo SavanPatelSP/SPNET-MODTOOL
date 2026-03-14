@@ -16,6 +16,7 @@ use App\Services\RosterService;
 use App\Services\ArchiveService;
 use App\Services\ReportApprovalService;
 use App\Services\AuditLogService;
+use App\Services\PaymentService;
 use App\Reports\RewardSheet;
 use App\Reports\RewardCsv;
 use App\Reports\MultiChatReport;
@@ -43,6 +44,7 @@ class UpdateHandler
     private ArchiveService $archive;
     private ReportApprovalService $approvals;
     private AuditLogService $audit;
+    private PaymentService $payments;
     private RewardSheet $rewardSheet;
     private RewardCsv $rewardCsv;
     private MultiChatReport $multiChatReport;
@@ -65,6 +67,7 @@ class UpdateHandler
         $this->archive = new ArchiveService($db);
         $this->approvals = new ReportApprovalService($db);
         $this->audit = new AuditLogService($db);
+        $this->payments = new PaymentService($db, $config);
         $this->coaching = new CoachingService($this->stats, $this->settings, $config);
         $this->health = new HealthService($this->stats, $this->settings, $config);
         $this->roster = new RosterService($db);
@@ -211,6 +214,7 @@ class UpdateHandler
             'plan', 'setplan', 'coach', 'health', 'trend', 'execsummary', 'archive',
             'rosteradd', 'rosterremove', 'rosterlist', 'rosterrole',
             'premium', 'benefits', 'pricing', 'guide', 'giftplan', 'grantplan', 'approval', 'approvereport', 'approvalstatus', 'auditlogcsv',
+            'buy_stars_test', 'buy_crypto_test', 'paystatus',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
 
@@ -262,6 +266,18 @@ class UpdateHandler
 
             if ($command === 'auditlogcsv') {
                 $this->handleAuditLogCsv($chatId, $args, $userId);
+                return;
+            }
+            if ($command === 'buy_stars_test') {
+                $this->handleTestPurchase($chatId, $userId, $args, 'stars');
+                return;
+            }
+            if ($command === 'buy_crypto_test') {
+                $this->handleTestPurchase($chatId, $userId, $args, 'crypto');
+                return;
+            }
+            if ($command === 'paystatus') {
+                $this->handlePaymentStatus($chatId, $userId);
                 return;
             }
 
@@ -968,6 +984,112 @@ class UpdateHandler
         $this->tg->sendDocument($responseChatId, $file, 'Audit log export');
     }
 
+    private function handleTestPurchase(int|string $responseChatId, int|string $userId, string $args, string $method): void
+    {
+        if (!$this->isManager($userId)) {
+            $this->tg->sendMessage($responseChatId, 'Only bot managers or owners can run test purchases.', ['parse_mode' => 'HTML']);
+            return;
+        }
+        if (!$this->payments->isTestMode()) {
+            $this->tg->sendMessage($responseChatId, 'Test payments are disabled. Enable payments.test_mode in config.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $tokens = preg_split('/\\s+/', trim($args));
+        $amount = null;
+        $chatIdFromArgs = null;
+        $rest = [];
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if ($chatIdFromArgs === null && preg_match('/^(?:chat|chatid|group|id):(-?\\d+)$/i', $token, $match)) {
+                $chatIdFromArgs = (int)$match[1];
+                continue;
+            }
+            if ($chatIdFromArgs === null && preg_match('/^-?\\d{6,}$/', $token)) {
+                $chatIdFromArgs = (int)$token;
+                continue;
+            }
+            if ($amount === null && is_numeric($token)) {
+                $amount = (float)$token;
+                continue;
+            }
+            $rest[] = $token;
+        }
+        if ($amount === null || $amount <= 0) {
+            $usage = $method === 'crypto' ? '/buy_crypto_test <amount> [chat_id]' : '/buy_stars_test <amount> [chat_id]';
+            $this->tg->sendMessage($responseChatId, 'Usage: ' . $usage, ['parse_mode' => 'HTML']);
+            return;
+        }
+        $cleanArgs = trim(implode(' ', $rest));
+        $targetChatId = $chatIdFromArgs;
+        if (!$targetChatId) {
+            [$targetChatId, $cleanArgs] = $this->resolveTargetChatId($userId, $responseChatId, $cleanArgs);
+            if (!$targetChatId) {
+                return;
+            }
+        }
+        if (!$this->isAuthorized($targetChatId, $userId)) {
+            $this->tg->sendMessage($responseChatId, 'You do not have permission for that chat.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $tier = $this->payments->selectTier($method, $amount);
+        $plan = $tier['plan'] ?? null;
+        $days = isset($tier['days']) ? (int)$tier['days'] : null;
+        $currency = $tier['currency'] ?? ($method === 'crypto' ? 'USDT' : 'STARS');
+
+        if ($plan) {
+            $this->subscriptions->setPlan($targetChatId, $plan, $days);
+        }
+
+        $this->payments->recordTest($targetChatId, $userId, $method, $amount, $currency, $plan, $days, [
+            'raw_args' => $cleanArgs,
+            'method' => $method,
+        ]);
+        $this->audit->log('payment_test', $userId, (int)$targetChatId, [
+            'method' => $method,
+            'amount' => $amount,
+            'currency' => $currency,
+            'plan' => $plan,
+            'days' => $days,
+        ]);
+
+        $lines = [
+            '<b>Test payment recorded</b>',
+            'Chat: ' . $targetChatId,
+            'Method: ' . strtoupper($method),
+            'Amount: ' . number_format($amount, 2) . ' ' . $this->escape($currency),
+        ];
+        if ($plan) {
+            $lines[] = 'Granted: ' . strtoupper($plan) . ($days ? (' for ' . $days . ' days') : '');
+        } else {
+            $lines[] = 'No plan matched. Update payments tiers in config.';
+        }
+        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+    }
+
+    private function handlePaymentStatus(int|string $responseChatId, int|string $userId): void
+    {
+        $latest = $this->payments->latestForUser($userId);
+        if (!$latest) {
+            $this->tg->sendMessage($responseChatId, 'No payments recorded yet.', ['parse_mode' => 'HTML']);
+            return;
+        }
+        $lines = [
+            '<b>Latest Payment</b>',
+            'Method: ' . strtoupper($latest['method'] ?? ''),
+            'Amount: ' . number_format((float)($latest['amount'] ?? 0), 2) . ' ' . $this->escape($latest['currency'] ?? ''),
+            'Status: ' . $this->escape($latest['status'] ?? ''),
+            'Plan: ' . $this->escape($latest['plan'] ?? '-'),
+            'Days: ' . $this->escape((string)($latest['days'] ?? '-')),
+            'Chat: ' . $this->escape((string)($latest['chat_id'] ?? '')),
+            'At: ' . $this->escape($latest['created_at'] ?? ''),
+        ];
+        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+    }
+
     private function handleCoach(int|string $responseChatId, int|string $chatId, string $args): void
     {
         if (!$this->requirePremium($chatId, $responseChatId)) {
@@ -1196,6 +1318,7 @@ class UpdateHandler
             '- Dedicated support + SLA',
             'Best for: large communities with multiple teams',
             '',
+            'Pay with Telegram Stars or crypto (test mode supported).',
             'Upgrade (owner only): /setplan premium 30',
         ];
 
@@ -2111,6 +2234,9 @@ class UpdateHandler
                 '/archive',
                 '/premium (view premium benefits)',
                 '/pricing (tiers + features)',
+                '/buy_stars_test &lt;amount&gt; [chat_id] (manager/owner)',
+                '/buy_crypto_test &lt;amount&gt; [chat_id] (manager/owner)',
+                '/paystatus (latest payment)',
                 '/setbudget &lt;amount&gt; [chat_id]',
                 '/settimezone &lt;Region/City&gt; [chat_id]',
                 '/setactivity &lt;gap_minutes&gt; &lt;floor_minutes&gt; [chat_id]',
@@ -2211,6 +2337,11 @@ class UpdateHandler
             '<code>/approvereport 2026-02</code>',
             '<code>/approvalstatus 2026-02</code>',
             '<code>/auditlogcsv 200</code>',
+            '',
+            '<b>Test payments (Stars + Crypto)</b>',
+            '<code>/buy_stars_test 500</code>',
+            '<code>/buy_crypto_test 25</code>',
+            '<code>/paystatus</code>',
             '',
             '<b>Premium insights</b>',
             '<code>/coach 2026-02</code>',

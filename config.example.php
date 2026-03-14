@@ -197,4 +197,17 @@ return [
         'webhook_url' => null,
         'timeout_seconds' => 10,
     ],
+
+    // Payments (test mode for Telegram Stars / Crypto simulation)
+    'payments' => [
+        'test_mode' => true,
+        'stars_tiers' => [
+            ['min' => 500, 'plan' => 'premium', 'days' => 30],
+            ['min' => 1500, 'plan' => 'enterprise', 'days' => 30],
+        ],
+        'crypto_tiers' => [
+            ['min' => 20, 'currency' => 'USDT', 'plan' => 'premium', 'days' => 30],
+            ['min' => 50, 'currency' => 'USDT', 'plan' => 'enterprise', 'days' => 30],
+        ],
+    ],
 ];
