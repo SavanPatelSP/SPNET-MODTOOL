@@ -12,6 +12,7 @@ class Logger
     private static int $maxLength = 3500;
     private static bool $channelEnabled = false;
     private static bool $sending = false;
+    private static string $timezoneName = 'UTC';
 
     public static function initChannel(?Telegram $tg, array $config): void
     {
@@ -26,6 +27,7 @@ class Logger
         self::$channelId = (string)$channelId;
         self::$minLevel = strtolower((string)($logging['min_level'] ?? 'info'));
         self::$maxLength = max(500, (int)($logging['max_length'] ?? 3500));
+        self::$timezoneName = (string)($config['timezone'] ?? date_default_timezone_get() ?: 'UTC');
         self::$channelEnabled = true;
     }
 
@@ -42,7 +44,7 @@ class Logger
     private static function write(string $level, string $message): void
     {
         $path = __DIR__ . '/../storage/logs/app.log';
-        $date = gmdate('Y-m-d H:i:s');
+        $date = self::formatTimestamp();
         $line = '[' . $date . '] ' . $level . ' ' . $message . PHP_EOL;
         @file_put_contents($path, $line, FILE_APPEND);
 
@@ -62,7 +64,7 @@ class Logger
         }
 
         self::$sending = true;
-        $text = '[' . $date . '] ' . $level . ' ' . $message;
+        $text = '[' . $date . '] ' . $level . "\n" . $message;
         if (function_exists('mb_strlen') && function_exists('mb_substr')) {
             if (mb_strlen($text) > self::$maxLength) {
                 $text = mb_substr($text, 0, self::$maxLength - 3) . '...';
@@ -80,6 +82,18 @@ class Logger
             'disable_web_page_preview' => true,
         ]);
         self::$sending = false;
+    }
+
+    private static function formatTimestamp(): string
+    {
+        try {
+            $tzName = self::$timezoneName !== '' ? self::$timezoneName : 'UTC';
+            $tz = new \DateTimeZone($tzName);
+            $dt = new \DateTimeImmutable('now', $tz);
+            return $dt->format('Y-m-d H:i:s.v T P') . ' ' . $tzName;
+        } catch (\Throwable $e) {
+            return gmdate('Y-m-d H:i:s') . ' UTC +00:00 UTC';
+        }
     }
 
     private static function levelAllowed(string $level): bool
