@@ -40,18 +40,31 @@ class RewardSheet
         $rewardMap = [];
         $bonusMap = [];
         $eligibilityMap = [];
+        $rewardScoreMap = [];
         foreach ($ranked as $item) {
             $rewardMap[$item['user_id']] = $item['reward'];
             $bonusMap[$item['user_id']] = $item['bonus'] ?? 0.0;
+            if (array_key_exists('reward_score', $item)) {
+                $rewardScoreMap[$item['user_id']] = $item['reward_score'];
+            }
             if (array_key_exists('eligible', $item)) {
                 $eligibilityMap[$item['user_id']] = (bool)$item['eligible'];
             }
         }
 
         $modsSorted = $mods;
-        usort($modsSorted, fn($a, $b) => $b['score'] <=> $a['score']);
+        foreach ($modsSorted as &$mod) {
+            if (isset($rewardScoreMap[$mod['user_id']])) {
+                $mod['reward_score'] = $rewardScoreMap[$mod['user_id']];
+            }
+        }
+        unset($mod);
 
-        $topScore = $modsSorted[0]['score'] ?? 1;
+        $rankBy = $this->config['reward']['rank_by'] ?? 'score';
+        $rankKey = ($rankBy === 'reward_score' && !empty($rewardScoreMap)) ? 'reward_score' : 'score';
+        usort($modsSorted, fn($a, $b) => ($b[$rankKey] ?? 0) <=> ($a[$rankKey] ?? 0));
+
+        $topScore = $modsSorted[0][$rankKey] ?? 1;
 
         $insights = $this->buildInsights($modsSorted);
 
@@ -74,6 +87,7 @@ class RewardSheet
             'secondary' => $secondary,
             'label' => $label,
             'budget' => $budget,
+            'rank_key' => $rankKey,
             'approval_required' => $approvalRequired,
             'approval_status' => $approvalStatus,
             'summary' => $summary,
@@ -174,6 +188,7 @@ class RewardSheet
     private function renderHtml(array $data): string
     {
         $mods = $data['mods'];
+        $rankKey = $data['rank_key'] ?? 'score';
         foreach ($mods as &$mod) {
             $mod['actions_total'] = $mod['warnings'] + $mod['mutes'] + $mod['bans'];
         }
@@ -183,7 +198,8 @@ class RewardSheet
         $rank = 1;
         foreach ($mods as $mod) {
             $reward = $data['reward_map'][$mod['user_id']] ?? 0.0;
-            $scorePercent = $data['top_score'] > 0 ? ($mod['score'] / $data['top_score']) * 100 : 0;
+            $metricValue = $mod[$rankKey] ?? ($mod['score'] ?? 0);
+            $scorePercent = $data['top_score'] > 0 ? ($metricValue / $data['top_score']) * 100 : 0;
             $eligible = $data['eligibility_map'][$mod['user_id']] ?? true;
             $rowClass = $eligible ? '' : 'row-ineligible';
             $internalMessages = $mod['internal_messages'] ?? $mod['messages'];

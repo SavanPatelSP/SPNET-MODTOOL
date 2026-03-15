@@ -13,10 +13,6 @@ class RewardService
 
     public function rankAndReward(array $mods, float $budget, array $context = []): array
     {
-        usort($mods, function (array $a, array $b): int {
-            return $b['score'] <=> $a['score'];
-        });
-
         $eligibility = $this->config['eligibility'] ?? [];
         $minDays = (int)($eligibility['min_days_active'] ?? 0);
         $minMessages = (int)($eligibility['min_messages'] ?? 0);
@@ -24,12 +20,21 @@ class RewardService
         $minActions = (int)($eligibility['min_actions'] ?? 0);
         $minActiveHours = (float)($eligibility['min_active_hours'] ?? 0);
 
-        $topN = $this->config['reward']['top_n'] ?? count($mods);
+        $rewardConfig = $this->config['reward'] ?? [];
+        $topN = $rewardConfig['top_n'] ?? count($mods);
         $topN = min($topN, count($mods));
-        $rankMultipliers = $this->config['reward']['rank_multipliers'] ?? [];
-        $minReward = (float)($this->config['reward']['min_reward'] ?? 0);
-        $bonusPercent = (float)($this->config['reward']['kpi_bonus_percent'] ?? 0);
-        $bonusSplit = $this->config['reward']['kpi_bonus_split'] ?? [];
+        $rankMultipliers = $rewardConfig['rank_multipliers'] ?? [];
+        $minReward = (float)($rewardConfig['min_reward'] ?? 0);
+        $bonusPercent = (float)($rewardConfig['kpi_bonus_percent'] ?? 0);
+        $bonusSplit = $rewardConfig['kpi_bonus_split'] ?? [];
+        $rankBy = strtolower((string)($rewardConfig['rank_by'] ?? 'score'));
+        $scoreExponent = (float)($rewardConfig['score_exponent'] ?? 0.85);
+        $baseStipendPercent = (float)($rewardConfig['base_stipend_percent'] ?? 0.1);
+        $scoreComponents = $rewardConfig['score_components'] ?? [
+            'score' => 0.7,
+            'impact' => 0.2,
+            'consistency' => 0.1,
+        ];
         $bonusPool = $budget > 0 ? max(0.0, $budget * $bonusPercent) : 0.0;
         $baseBudget = max(0.0, $budget - $bonusPool);
 
@@ -67,14 +72,38 @@ class RewardService
             $eligible[] = $mod;
         }
 
-        $eligibleTop = [];
+        $eligibleForRanges = array_values(array_filter($eligible, static fn(array $mod): bool => !empty($mod['eligible'])));
+        if (empty($eligibleForRanges)) {
+            $eligibleForRanges = $eligible;
+        }
+
+        $scoreComponents = $this->normalizeScoreComponents($scoreComponents);
+        $ranges = $this->buildComponentRanges($eligibleForRanges, $scoreComponents);
+        foreach ($eligible as &$mod) {
+            $mod['reward_score'] = $this->computeRewardScore($mod, $scoreComponents, $ranges);
+        }
+        unset($mod);
+
+        usort($eligible, function (array $a, array $b) use ($rankBy): int {
+            $aVal = $this->getRankValue($a, $rankBy);
+            $bVal = $this->getRankValue($b, $rankBy);
+            if ($aVal === $bVal) {
+                return ($b['score'] ?? 0) <=> ($a['score'] ?? 0);
+            }
+            return $bVal <=> $aVal;
+        });
+
+        $eligibleOrder = [];
         foreach ($eligible as $mod) {
             if ($mod['eligible']) {
-                $eligibleTop[] = $mod;
-                if (count($eligibleTop) >= $topN) {
-                    break;
-                }
+                $eligibleOrder[] = $mod;
             }
+        }
+
+        $eligibleTop = array_slice($eligibleOrder, 0, $topN);
+        $topIndex = [];
+        foreach ($eligibleTop as $i => $mod) {
+            $topIndex[$mod['user_id']] = $i;
         }
 
         $bonusMap = $this->buildBonusMap($eligible, $bonusPool, $bonusSplit);
@@ -84,7 +113,10 @@ class RewardService
         $rank = 1;
         foreach ($eligibleTop as $mod) {
             $multiplier = $rankMultipliers[$rank] ?? 1.0;
-            $adjusted = $mod['score'] * $multiplier;
+            $baseScore = $mod['reward_score'] ?? ($mod['score'] ?? 0.0);
+            $baseScore = max(0.0, (float)$baseScore);
+            $adjusted = $scoreExponent !== 1.0 ? pow($baseScore, $scoreExponent) : $baseScore;
+            $adjusted *= $multiplier;
             if ($premium && isset($stabilityBonus[$mod['user_id']])) {
                 $adjusted *= (1 + (float)$stabilityBonus[$mod['user_id']]);
             }
@@ -97,22 +129,27 @@ class RewardService
             $rank++;
         }
 
-        $rewards = [];
-        $remainingBudget = $baseBudget;
-        foreach ($eligibleTop as $i => $mod) {
-            $reward = 0.0;
-            if ($total > 0) {
-                $reward = ($baseBudget * $adjustedScores[$i]) / $total;
-                $reward = max($minReward, $reward);
-            }
-            $reward = round($reward, 2);
-            $remainingBudget -= $reward;
-            $mod['reward'] = $reward;
-            $rewards[] = $mod;
-        }
+        $eligibleCount = count($eligibleOrder);
+        $baseStipendPercent = max(0.0, min(0.8, $baseStipendPercent));
+        $stipendPool = $eligibleCount > 0 ? ($baseBudget * $baseStipendPercent) : 0.0;
+        $performanceBudget = max(0.0, $baseBudget - $stipendPool);
+        $stipendPer = $eligibleCount > 0 ? ($stipendPool / $eligibleCount) : 0.0;
 
-        if (!empty($rewards)) {
-            $rewards[count($rewards) - 1]['reward'] = round($rewards[count($rewards) - 1]['reward'] + $remainingBudget, 2);
+        $rewards = [];
+        foreach ($eligibleOrder as $mod) {
+            $reward = $stipendPer;
+            if (isset($topIndex[$mod['user_id']])) {
+                $i = $topIndex[$mod['user_id']];
+                if ($total > 0) {
+                    $reward += ($performanceBudget * $adjustedScores[$i]) / $total;
+                }
+                if ($minReward > 0) {
+                    $reward = max($minReward, $reward);
+                }
+            }
+            $mod['reward'] = $reward;
+            $mod['bonus'] = 0.0;
+            $rewards[] = $mod;
         }
 
         if ($premium) {
@@ -120,6 +157,10 @@ class RewardService
             if ($maxShare > 0 && $baseBudget > 0) {
                 $rewards = $this->applyRewardCap($rewards, $baseBudget, $maxShare);
             }
+        }
+
+        if (!empty($rewards) && (!$premium || ($context['max_share'] ?? ($premiumReward['max_share'] ?? 0)) <= 0)) {
+            $rewards = $this->finalizeRewards($rewards, $baseBudget);
         }
 
         if (!empty($bonusMap)) {
@@ -257,5 +298,129 @@ class RewardService
         }
 
         return $rewards;
+    }
+
+    private function finalizeRewards(array $rewards, float $budget): array
+    {
+        $total = 0.0;
+        foreach ($rewards as $i => $mod) {
+            $rewards[$i]['reward'] = round((float)($mod['reward'] ?? 0), 2);
+            $total += $rewards[$i]['reward'];
+        }
+        $delta = round($budget - $total, 2);
+        if (!empty($rewards)) {
+            $last = count($rewards) - 1;
+            $rewards[$last]['reward'] = round($rewards[$last]['reward'] + $delta, 2);
+        }
+        return $rewards;
+    }
+
+    private function normalizeScoreComponents(array $components): array
+    {
+        $clean = [];
+        foreach ($components as $key => $weight) {
+            $weight = (float)$weight;
+            if ($weight <= 0) {
+                continue;
+            }
+            $clean[(string)$key] = $weight;
+        }
+        if (empty($clean)) {
+            return ['score' => 1.0];
+        }
+        return $clean;
+    }
+
+    private function buildComponentRanges(array $mods, array $components): array
+    {
+        $ranges = [];
+        foreach ($components as $key => $weight) {
+            $min = null;
+            $max = null;
+            foreach ($mods as $mod) {
+                $value = $this->getComponentValue($mod, $key);
+                if ($min === null || $value < $min) {
+                    $min = $value;
+                }
+                if ($max === null || $value > $max) {
+                    $max = $value;
+                }
+            }
+            $ranges[$key] = [
+                'min' => $min ?? 0.0,
+                'max' => $max ?? 0.0,
+            ];
+        }
+        return $ranges;
+    }
+
+    private function computeRewardScore(array $mod, array $components, array $ranges): float
+    {
+        $weightSum = 0.0;
+        $score = 0.0;
+        foreach ($components as $key => $weight) {
+            $weight = (float)$weight;
+            if ($weight <= 0) {
+                continue;
+            }
+            $range = $ranges[$key] ?? ['min' => 0.0, 'max' => 0.0];
+            $value = $this->getComponentValue($mod, $key);
+            $normalized = $this->normalizeValue($value, (float)$range['min'], (float)$range['max']);
+            $score += $normalized * $weight;
+            $weightSum += $weight;
+        }
+        if ($weightSum <= 0) {
+            return 0.0;
+        }
+        return round($score / $weightSum, 4);
+    }
+
+    private function getComponentValue(array $mod, string $key): float
+    {
+        switch (strtolower($key)) {
+            case 'impact':
+            case 'impact_score':
+                return (float)($mod['impact_score'] ?? 0);
+            case 'consistency':
+            case 'consistency_index':
+                return (float)($mod['consistency_index'] ?? 0);
+            case 'actions':
+            case 'actions_total':
+                return (float)($mod['actions_total'] ?? (($mod['warnings'] ?? 0) + ($mod['mutes'] ?? 0) + ($mod['bans'] ?? 0)));
+            case 'active_minutes':
+                return (float)($mod['active_minutes'] ?? 0);
+            case 'messages':
+                return (float)($mod['messages'] ?? 0);
+            case 'days_active':
+                return (float)($mod['days_active'] ?? 0);
+            case 'score':
+            default:
+                return (float)($mod['score'] ?? 0);
+        }
+    }
+
+    private function normalizeValue(float $value, float $min, float $max): float
+    {
+        if ($max <= $min) {
+            return $max > 0 ? 1.0 : 0.0;
+        }
+        return ($value - $min) / ($max - $min);
+    }
+
+    private function getRankValue(array $mod, string $rankBy): float
+    {
+        switch ($rankBy) {
+            case 'reward_score':
+                return (float)($mod['reward_score'] ?? 0);
+            case 'impact':
+            case 'impact_score':
+                return (float)($mod['impact_score'] ?? 0);
+            case 'consistency':
+            case 'consistency_index':
+                return (float)($mod['consistency_index'] ?? 0);
+            case 'score':
+            default:
+                return (float)($mod['score'] ?? 0);
+        }
     }
 }

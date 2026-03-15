@@ -2831,10 +2831,14 @@ class UpdateHandler
         $lines[] = 'Budget: ' . number_format($budget, 2);
         $lines[] = '';
 
+        $rankBy = $this->config['reward']['rank_by'] ?? 'score';
         $rank = 1;
         foreach ($ranked as $mod) {
-            $line = $rank . '. ' . $this->escape($mod['display_name']) .
-                ' | Score ' . number_format($mod['score'], 2) .
+            $line = $rank . '. ' . $this->escape($mod['display_name']);
+            if ($rankBy === 'reward_score' && isset($mod['reward_score'])) {
+                $line .= ' | Reward Score ' . number_format((float)$mod['reward_score'], 3);
+            }
+            $line .= ' | Score ' . number_format($mod['score'], 2) .
                 ' | Reward ' . number_format($mod['reward'], 2);
             if (!empty($mod['bonus'])) {
                 $line .= ' | Bonus ' . number_format((float)$mod['bonus'], 2);

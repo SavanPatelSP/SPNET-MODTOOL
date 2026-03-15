@@ -65,6 +65,18 @@ return [
     // Reward distribution settings
     'reward' => [
         'top_n' => 5,
+        // Rank mods by: score | reward_score | impact_score | consistency_index
+        'rank_by' => 'reward_score',
+        // Smooth out extreme scores (0.7-1.0 recommended)
+        'score_exponent' => 0.85,
+        // Portion of budget split equally among all eligible mods
+        'base_stipend_percent' => 0.10,
+        // Weighted components for reward score (auto-normalized)
+        'score_components' => [
+            'score' => 0.7,
+            'impact' => 0.2,
+            'consistency' => 0.1,
+        ],
         'rank_multipliers' => [
             1 => 1.30,
             2 => 1.15,
