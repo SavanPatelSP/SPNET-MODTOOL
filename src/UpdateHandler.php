@@ -148,8 +148,7 @@ class UpdateHandler
         if ($this->isRegularMessage($message)) {
             $this->recordMessage($chatId, $message);
             if ($this->shouldLog('log_updates')) {
-                $fromId = $message['from']['id'] ?? 'unknown';
-                Logger::info('Message update in chat ' . $chatId . ' from ' . $fromId . ' msg ' . ($message['message_id'] ?? ''));
+                Logger::infoContext('Message update', $this->logContextFromMessage($chatId, $message));
             }
         }
 
@@ -163,7 +162,13 @@ class UpdateHandler
         }
 
         if ($this->shouldLog('log_commands')) {
-            Logger::info('Command ' . $parsed['command'] . ' from user ' . ($message['from']['id'] ?? 'unknown') . ' in chat ' . $chatId);
+            Logger::infoContext(
+                'Command received',
+                $this->logContextFromMessage($chatId, $message, [
+                    'command' => $parsed['command'],
+                    'args' => $parsed['args'] !== '' ? $parsed['args'] : null,
+                ])
+            );
         }
 
         $this->handleCommand($chatId, $message, $parsed['command'], $parsed['args'], $chatType);
@@ -498,7 +503,14 @@ class UpdateHandler
         $text = $this->formatLeaderboardMessage($ranked, $stats['range'], $budget);
         $this->tg->sendMessage($responseChatId, $text, ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_reports')) {
-            Logger::info('Leaderboard generated for chat ' . $chatId . ' month ' . ($stats['range']['month'] ?? ''));
+            Logger::infoContext(
+                'Leaderboard generated',
+                $this->logContextForChat($chatId, [
+                    'month' => $stats['range']['month'] ?? null,
+                    'mods' => count($stats['mods']),
+                    'budget' => number_format($budget, 2, '.', ''),
+                ])
+            );
         }
     }
 
@@ -535,7 +547,15 @@ class UpdateHandler
         $caption = 'Reward sheet for ' . $stats['range']['label'] . ' (budget: ' . number_format($budget, 2) . ')';
         $this->tg->sendDocument($responseChatId, $filePath, $caption);
         if ($this->shouldLog('log_reports')) {
-            Logger::info('Reward sheet generated for chat ' . $chatId . ' month ' . ($stats['range']['month'] ?? ''));
+            Logger::infoContext(
+                'Reward sheet generated',
+                $this->logContextForChat($chatId, [
+                    'month' => $stats['range']['month'] ?? null,
+                    'mods' => count($stats['mods']),
+                    'budget' => number_format($budget, 2, '.', ''),
+                    'file' => basename($filePath),
+                ])
+            );
         }
     }
 
@@ -572,7 +592,15 @@ class UpdateHandler
         $caption = 'CSV reward sheet for ' . $stats['range']['label'] . ' (budget: ' . number_format($budget, 2) . ')';
         $this->tg->sendDocument($responseChatId, $filePath, $caption);
         if ($this->shouldLog('log_reports')) {
-            Logger::info('Reward CSV generated for chat ' . $chatId . ' month ' . ($stats['range']['month'] ?? ''));
+            Logger::infoContext(
+                'Reward CSV generated',
+                $this->logContextForChat($chatId, [
+                    'month' => $stats['range']['month'] ?? null,
+                    'mods' => count($stats['mods']),
+                    'budget' => number_format($budget, 2, '.', ''),
+                    'file' => basename($filePath),
+                ])
+            );
         }
     }
 
@@ -624,7 +652,15 @@ class UpdateHandler
         }
         $this->tg->sendDocument($responseChatId, $filePath, $caption);
         if ($this->shouldLog('log_reports')) {
-            Logger::info('Multi-chat summary generated for user ' . $userId . ' month ' . ($bundle['range']['month'] ?? ''));
+            Logger::infoContext(
+                'Multi-chat summary generated',
+                $this->logContextForUser($userId, [
+                    'month' => $bundle['range']['month'] ?? null,
+                    'chats' => count($chatIds),
+                    'budget' => $budget !== null ? number_format($budget, 2, '.', '') : null,
+                    'file' => basename($filePath),
+                ])
+            );
         }
     }
 
@@ -697,12 +733,25 @@ class UpdateHandler
         if ($result['ok']) {
             $this->tg->sendMessage($responseChatId, 'Exported to Google Sheets successfully.', ['parse_mode' => 'HTML']);
             if ($this->shouldLog('log_reports')) {
-                Logger::info('Google Sheets export completed for chat ' . $chatId . ' month ' . ($stats['range']['month'] ?? ''));
+                Logger::infoContext(
+                    'Google Sheets export completed',
+                    $this->logContextForChat($chatId, [
+                        'month' => $stats['range']['month'] ?? null,
+                        'rows' => count($rows),
+                        'budget' => number_format($budget, 2, '.', ''),
+                    ])
+                );
             }
         } else {
             $error = $result['error'] ?? 'unknown error';
             $this->tg->sendMessage($responseChatId, 'Google Sheets export failed: ' . $this->escape((string)$error), ['parse_mode' => 'HTML']);
-            Logger::error('Google Sheets export failed for chat ' . $chatId . ': ' . $error);
+            Logger::errorContext(
+                'Google Sheets export failed',
+                $this->logContextForChat($chatId, [
+                    'month' => $stats['range']['month'] ?? null,
+                    'error' => (string)$error,
+                ])
+            );
         }
     }
 
@@ -721,7 +770,17 @@ class UpdateHandler
         $this->setModStatus($chatId, $target['id'], true);
         $this->tg->sendMessage($responseChatId, 'Mod added: ' . $this->displayName($target), ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_commands')) {
-            Logger::info('Mod added in chat ' . $chatId . ' -> ' . $target['id']);
+            Logger::infoContext(
+                'Mod added',
+                $this->logContextForChat($chatId, [
+                    'actor_id' => $message['from']['id'] ?? null,
+                    'actor_username' => $message['from']['username'] ?? null,
+                    'actor_name' => $this->formatUserLabel($message['from'] ?? []),
+                    'target_id' => $target['id'],
+                    'target_username' => $target['username'] ?? null,
+                    'target_name' => $this->formatUserLabel($target),
+                ])
+            );
         }
     }
 
@@ -740,7 +799,17 @@ class UpdateHandler
         $this->setModStatus($chatId, $target['id'], false);
         $this->tg->sendMessage($responseChatId, 'Mod removed: ' . $this->displayName($target), ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_commands')) {
-            Logger::info('Mod removed in chat ' . $chatId . ' -> ' . $target['id']);
+            Logger::infoContext(
+                'Mod removed',
+                $this->logContextForChat($chatId, [
+                    'actor_id' => $message['from']['id'] ?? null,
+                    'actor_username' => $message['from']['username'] ?? null,
+                    'actor_name' => $this->formatUserLabel($message['from'] ?? []),
+                    'target_id' => $target['id'],
+                    'target_username' => $target['username'] ?? null,
+                    'target_name' => $this->formatUserLabel($target),
+                ])
+            );
         }
     }
 
@@ -761,8 +830,8 @@ class UpdateHandler
             $lines[] = $mod['id'] . ' | ' . $this->displayName($mod);
         }
         $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
-        if ($this->shouldLog('log_reports')) {
-            Logger::info('Coach report generated for chat ' . $chatId . ' range ' . ($report['range']['month'] ?? ''));
+        if ($this->shouldLog('log_commands')) {
+            Logger::infoContext('Mod list viewed', $this->logContextForChat($chatId, ['mods' => count($mods)]));
         }
     }
 
@@ -781,8 +850,12 @@ class UpdateHandler
             'Managers can gift with /giftplan &lt;chat_id&gt; premium 30',
         ];
         $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
-        if ($this->shouldLog('log_reports')) {
-            Logger::info('Health report generated for chat ' . $chatId . ' range ' . ($report['range']['month'] ?? ''));
+        if ($this->shouldLog('log_commands')) {
+            Logger::infoContext('Plan viewed', $this->logContextForChat($chatId, [
+                'plan' => $plan,
+                'status' => $status,
+                'expires' => $expires ?: 'never',
+            ]));
         }
     }
 
@@ -807,7 +880,14 @@ class UpdateHandler
         }
         $this->tg->sendMessage($responseChatId, $msg, ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_commands')) {
-            Logger::info('Plan updated for chat ' . $chatId . ' -> ' . strtoupper($sub['plan']));
+            Logger::infoContext(
+                'Plan updated',
+                $this->logContextForChatUser($chatId, $userId, [
+                    'plan' => strtoupper($sub['plan']),
+                    'days' => $days,
+                    'expires' => $sub['expires_at'] ?? null,
+                ])
+            );
         }
         $this->audit->log('plan_set', $userId, (int)$chatId, [
             'plan' => $sub['plan'],
@@ -857,7 +937,15 @@ class UpdateHandler
         }
         $this->tg->sendMessage($responseChatId, $msg, ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_commands')) {
-            Logger::info('Gifted plan ' . $plan . ' chat ' . $chatId . ' days ' . ($days ?? 0) . ' by ' . $userId);
+            Logger::infoContext(
+                'Plan gifted',
+                $this->logContextForChatUser($chatId, $userId, [
+                    'plan' => strtoupper($sub['plan'] ?? $plan),
+                    'days' => $days,
+                    'expires' => $expires,
+                    'note' => $note !== '' ? $note : null,
+                ])
+            );
         }
         $this->audit->log('plan_gift', $userId, $chatId, [
             'plan' => $sub['plan'] ?? $plan,
@@ -1280,7 +1368,15 @@ class UpdateHandler
         if (!($resp['ok'] ?? false)) {
             $this->tg->sendMessage($responseChatId, 'Failed to send Stars invoice. Check bot token + test environment.', ['parse_mode' => 'HTML']);
             if ($this->shouldLog('log_commands')) {
-                Logger::error('sendInvoice failed: ' . ($resp['description'] ?? 'unknown'));
+                Logger::errorContext(
+                    'Stars invoice failed',
+                    $this->logContextForChatUser($chatId, $userId, [
+                        'amount' => $amountInt,
+                        'plan' => $plan,
+                        'days' => $days,
+                        'error' => $resp['description'] ?? 'unknown',
+                    ])
+                );
             }
             return;
         }
@@ -1443,7 +1539,14 @@ class UpdateHandler
         $caption = 'Trend report for ' . $stats['range']['label'];
         $this->tg->sendDocument($responseChatId, $file, $caption);
         if ($this->shouldLog('log_reports')) {
-            Logger::info('Trend report generated for chat ' . $chatId . ' month ' . ($stats['range']['month'] ?? ''));
+            Logger::infoContext(
+                'Trend report generated',
+                $this->logContextForChat($chatId, [
+                    'month' => $stats['range']['month'] ?? null,
+                    'budget' => number_format($budget, 2, '.', ''),
+                    'file' => basename($file),
+                ])
+            );
         }
     }
 
@@ -1474,7 +1577,14 @@ class UpdateHandler
         $caption = 'Executive summary for ' . $stats['range']['label'];
         $this->tg->sendDocument($responseChatId, $file, $caption);
         if ($this->shouldLog('log_reports')) {
-            Logger::info('Executive summary generated for chat ' . $chatId . ' month ' . ($stats['range']['month'] ?? ''));
+            Logger::infoContext(
+                'Executive summary generated',
+                $this->logContextForChat($chatId, [
+                    'month' => $stats['range']['month'] ?? null,
+                    'budget' => number_format($budget, 2, '.', ''),
+                    'file' => basename($file),
+                ])
+            );
         }
     }
 
@@ -1516,7 +1626,7 @@ class UpdateHandler
         ];
         $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_commands')) {
-            Logger::info('Premium benefits viewed for chat ' . $chatId);
+            Logger::infoContext('Premium benefits viewed', $this->logContextForChat($chatId, ['plan' => $plan]));
         }
     }
 
@@ -1563,7 +1673,7 @@ class UpdateHandler
 
         $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_commands')) {
-            Logger::info('Pricing viewed for chat ' . $chatId);
+            Logger::infoContext('Pricing viewed', $this->logContextForChat($chatId, ['plan' => $plan]));
         }
     }
 
@@ -1586,7 +1696,19 @@ class UpdateHandler
         $this->roster->setRole($chatId, $target['id'], $role, $notes);
         $this->tg->sendMessage($responseChatId, 'Roster updated for ' . $this->displayName($target) . ' (' . $this->escape($role) . ').', ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_commands')) {
-            Logger::info('Roster add/update in chat ' . $chatId . ' -> ' . $target['id'] . ' role ' . $role);
+            Logger::infoContext(
+                'Roster add/update',
+                $this->logContextForChat($chatId, [
+                    'actor_id' => $message['from']['id'] ?? null,
+                    'actor_username' => $message['from']['username'] ?? null,
+                    'actor_name' => $this->formatUserLabel($message['from'] ?? []),
+                    'target_id' => $target['id'],
+                    'target_username' => $target['username'] ?? null,
+                    'target_name' => $this->formatUserLabel($target),
+                    'role' => $role,
+                    'notes' => $notes !== '' ? $notes : null,
+                ])
+            );
         }
     }
 
@@ -1603,7 +1725,17 @@ class UpdateHandler
         $this->roster->remove($chatId, $target['id']);
         $this->tg->sendMessage($responseChatId, 'Removed from roster: ' . $this->displayName($target), ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_commands')) {
-            Logger::info('Roster removed in chat ' . $chatId . ' -> ' . $target['id']);
+            Logger::infoContext(
+                'Roster removed',
+                $this->logContextForChat($chatId, [
+                    'actor_id' => $message['from']['id'] ?? null,
+                    'actor_username' => $message['from']['username'] ?? null,
+                    'actor_name' => $this->formatUserLabel($message['from'] ?? []),
+                    'target_id' => $target['id'],
+                    'target_username' => $target['username'] ?? null,
+                    'target_name' => $this->formatUserLabel($target),
+                ])
+            );
         }
     }
 
@@ -1647,7 +1779,19 @@ class UpdateHandler
         $this->roster->setRole($chatId, $target['id'], $role, $notes);
         $this->tg->sendMessage($responseChatId, 'Role updated for ' . $this->displayName($target) . ' → ' . $this->escape($role) . '.', ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_commands')) {
-            Logger::info('Roster role updated in chat ' . $chatId . ' -> ' . $target['id'] . ' role ' . $role);
+            Logger::infoContext(
+                'Roster role updated',
+                $this->logContextForChat($chatId, [
+                    'actor_id' => $message['from']['id'] ?? null,
+                    'actor_username' => $message['from']['username'] ?? null,
+                    'actor_name' => $this->formatUserLabel($message['from'] ?? []),
+                    'target_id' => $target['id'],
+                    'target_username' => $target['username'] ?? null,
+                    'target_name' => $this->formatUserLabel($target),
+                    'role' => $role,
+                    'notes' => $notes !== '' ? $notes : null,
+                ])
+            );
         }
     }
 
@@ -1677,7 +1821,12 @@ class UpdateHandler
         $this->settings->updateBudget($chatId, $amount);
         $this->tg->sendMessage($responseChatId, 'Budget set to ' . number_format($amount, 2) . '.', ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_commands')) {
-            Logger::info('Budget updated for chat ' . $chatId . ' -> ' . number_format($amount, 2));
+            Logger::infoContext(
+                'Budget updated',
+                $this->logContextForChat($chatId, [
+                    'amount' => number_format($amount, 2, '.', ''),
+                ])
+            );
         }
     }
 
@@ -1697,7 +1846,7 @@ class UpdateHandler
         $this->settings->updateTimezone($chatId, $tz);
         $this->tg->sendMessage($responseChatId, 'Timezone updated to ' . $this->escape($tz) . '.', ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_commands')) {
-            Logger::info('Timezone updated for chat ' . $chatId . ' -> ' . $tz);
+            Logger::infoContext('Timezone updated', $this->logContextForChat($chatId, ['timezone' => $tz]));
         }
     }
 
@@ -1713,7 +1862,13 @@ class UpdateHandler
         $this->settings->updateActivitySettings($chatId, $gap, $floor);
         $this->tg->sendMessage($responseChatId, 'Activity settings updated.', ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_commands')) {
-            Logger::info('Activity settings updated for chat ' . $chatId . ' gap ' . $gap . ' floor ' . $floor);
+            Logger::infoContext(
+                'Activity settings updated',
+                $this->logContextForChat($chatId, [
+                    'gap_minutes' => $gap,
+                    'floor_minutes' => $floor,
+                ])
+            );
         }
     }
 
@@ -2004,7 +2159,17 @@ class UpdateHandler
             $this->setModStatus($chatId, $target['id'], true);
             $this->tg->sendMessage($chatId, 'Mod added: ' . $this->displayName($target), ['parse_mode' => 'HTML']);
             if ($this->shouldLog('log_commands')) {
-                Logger::info('Mod added via group command in chat ' . $chatId . ' -> ' . $target['id']);
+                Logger::infoContext(
+                    'Mod added (group)',
+                    $this->logContextForChat($chatId, [
+                        'actor_id' => $message['from']['id'] ?? null,
+                        'actor_username' => $message['from']['username'] ?? null,
+                        'actor_name' => $this->formatUserLabel($message['from'] ?? []),
+                        'target_id' => $target['id'],
+                        'target_username' => $target['username'] ?? null,
+                        'target_name' => $this->formatUserLabel($target),
+                    ])
+                );
             }
             return;
         }
@@ -2013,7 +2178,17 @@ class UpdateHandler
             $this->setModStatus($chatId, $target['id'], false);
             $this->tg->sendMessage($chatId, 'Mod removed: ' . $this->displayName($target), ['parse_mode' => 'HTML']);
             if ($this->shouldLog('log_commands')) {
-                Logger::info('Mod removed via group command in chat ' . $chatId . ' -> ' . $target['id']);
+                Logger::infoContext(
+                    'Mod removed (group)',
+                    $this->logContextForChat($chatId, [
+                        'actor_id' => $message['from']['id'] ?? null,
+                        'actor_username' => $message['from']['username'] ?? null,
+                        'actor_name' => $this->formatUserLabel($message['from'] ?? []),
+                        'target_id' => $target['id'],
+                        'target_username' => $target['username'] ?? null,
+                        'target_name' => $this->formatUserLabel($target),
+                    ])
+                );
             }
             return;
         }
@@ -2049,7 +2224,13 @@ class UpdateHandler
             $this->settings->updateAutoReport($chatId, true, $day, $hour);
             $this->tg->sendMessage($responseChatId, 'Auto report enabled.', ['parse_mode' => 'HTML']);
             if ($this->shouldLog('log_commands')) {
-                Logger::info('Auto report enabled for chat ' . $chatId);
+                Logger::infoContext(
+                    'Auto report enabled',
+                    $this->logContextForChat($chatId, [
+                        'day' => $day,
+                        'hour' => $hour,
+                    ])
+                );
             }
             return;
         }
@@ -2058,7 +2239,7 @@ class UpdateHandler
             $this->settings->updateAutoReport($chatId, false, null, null);
             $this->tg->sendMessage($responseChatId, 'Auto report disabled.', ['parse_mode' => 'HTML']);
             if ($this->shouldLog('log_commands')) {
-                Logger::info('Auto report disabled for chat ' . $chatId);
+                Logger::infoContext('Auto report disabled', $this->logContextForChat($chatId));
             }
             return;
         }
@@ -2094,7 +2275,13 @@ class UpdateHandler
             $this->settings->updateProgressReport($chatId, true, $day, $hour);
             $this->tg->sendMessage($responseChatId, 'Progress report enabled.', ['parse_mode' => 'HTML']);
             if ($this->shouldLog('log_commands')) {
-                Logger::info('Progress report enabled for chat ' . $chatId);
+                Logger::infoContext(
+                    'Progress report enabled',
+                    $this->logContextForChat($chatId, [
+                        'day' => $day,
+                        'hour' => $hour,
+                    ])
+                );
             }
             return;
         }
@@ -2103,7 +2290,7 @@ class UpdateHandler
             $this->settings->updateProgressReport($chatId, false, null, null);
             $this->tg->sendMessage($responseChatId, 'Progress report disabled.', ['parse_mode' => 'HTML']);
             if ($this->shouldLog('log_commands')) {
-                Logger::info('Progress report disabled for chat ' . $chatId);
+                Logger::infoContext('Progress report disabled', $this->logContextForChat($chatId));
             }
             return;
         }
@@ -2139,7 +2326,14 @@ class UpdateHandler
         $caption = 'Progress report (MTD) for ' . $bundle['range']['label'] . ' (budget: ' . number_format($budget, 2) . ')';
         $this->tg->sendDocument($responseChatId, $filePath, $caption);
         if ($this->shouldLog('log_reports')) {
-            Logger::info('Progress report generated for chat ' . $chatId . ' month ' . ($bundle['range']['month'] ?? ''));
+            Logger::infoContext(
+                'Progress report generated',
+                $this->logContextForChat($chatId, [
+                    'month' => $bundle['range']['month'] ?? null,
+                    'budget' => number_format($budget, 2, '.', ''),
+                    'file' => basename($filePath),
+                ])
+            );
         }
     }
 
@@ -2650,6 +2844,93 @@ class UpdateHandler
         }
 
         return implode("\n", $lines);
+    }
+
+    private function logContextFromMessage(int|string $chatId, array $message, array $extra = []): array
+    {
+        $chat = $message['chat'] ?? [];
+        $from = $message['from'] ?? [];
+        $chatTitle = $chat['title'] ?? ($chat['username'] ?? null);
+        if (!$chatTitle) {
+            $chatTitle = trim(($chat['first_name'] ?? '') . ' ' . ($chat['last_name'] ?? ''));
+        }
+        $userName = trim(($from['first_name'] ?? '') . ' ' . ($from['last_name'] ?? ''));
+        $context = [
+            'chat_id' => $chatId,
+            'chat_title' => $chatTitle ?: null,
+            'chat_type' => $chat['type'] ?? null,
+            'user_id' => $from['id'] ?? null,
+            'username' => $from['username'] ?? null,
+            'user_name' => $userName !== '' ? $userName : null,
+            'message_id' => $message['message_id'] ?? null,
+        ];
+        return array_merge($context, $extra);
+    }
+
+    private function logContextForChat(int|string $chatId, array $extra = []): array
+    {
+        return array_merge($this->getChatMeta($chatId), $extra);
+    }
+
+    private function logContextForChatUser(int|string $chatId, int|string $userId, array $extra = []): array
+    {
+        return array_merge($this->getChatMeta($chatId), $this->getUserMeta($userId), $extra);
+    }
+
+    private function logContextForUser(int|string $userId, array $extra = []): array
+    {
+        return array_merge($this->getUserMeta($userId), $extra);
+    }
+
+    private function getChatMeta(int|string $chatId): array
+    {
+        static $cache = [];
+        $key = (string)$chatId;
+        if (isset($cache[$key])) {
+            return $cache[$key];
+        }
+        $row = $this->db->fetch('SELECT id, title, type FROM chats WHERE id = ? LIMIT 1', [$chatId]);
+        $cache[$key] = [
+            'chat_id' => $chatId,
+            'chat_title' => $row['title'] ?? null,
+            'chat_type' => $row['type'] ?? null,
+        ];
+        return $cache[$key];
+    }
+
+    private function getUserMeta(int|string $userId): array
+    {
+        static $cache = [];
+        $key = (string)$userId;
+        if (isset($cache[$key])) {
+            return $cache[$key];
+        }
+        $row = $this->db->fetch('SELECT id, username, first_name, last_name FROM users WHERE id = ? LIMIT 1', [$userId]);
+        $name = '';
+        if ($row) {
+            $name = trim(($row['first_name'] ?? '') . ' ' . ($row['last_name'] ?? ''));
+        }
+        $cache[$key] = [
+            'user_id' => $row['id'] ?? $userId,
+            'username' => $row['username'] ?? null,
+            'user_name' => $name !== '' ? $name : null,
+        ];
+        return $cache[$key];
+    }
+
+    private function formatUserLabel(array $user): string
+    {
+        if (!empty($user['username'])) {
+            return '@' . $user['username'];
+        }
+        $name = trim(($user['first_name'] ?? '') . ' ' . ($user['last_name'] ?? ''));
+        if ($name !== '') {
+            return $name;
+        }
+        if (!empty($user['id'])) {
+            return 'User ' . $user['id'];
+        }
+        return 'Unknown';
     }
 
     private function displayName(array $user): string

@@ -36,9 +36,19 @@ class Logger
         self::write('INFO', $message);
     }
 
+    public static function infoContext(string $event, array $context = []): void
+    {
+        self::write('INFO', self::formatContext($event, $context));
+    }
+
     public static function error(string $message): void
     {
         self::write('ERROR', $message);
+    }
+
+    public static function errorContext(string $event, array $context = []): void
+    {
+        self::write('ERROR', self::formatContext($event, $context));
     }
 
     private static function write(string $level, string $message): void
@@ -94,6 +104,41 @@ class Logger
         } catch (\Throwable $e) {
             return gmdate('Y-m-d H:i:s') . ' UTC +00:00 UTC';
         }
+    }
+
+    private static function formatContext(string $event, array $context): string
+    {
+        $lines = ['Event: ' . $event];
+        foreach ($context as $key => $value) {
+            if ($value === null || $value === '') {
+                continue;
+            }
+            $label = self::humanizeKey((string)$key);
+            $lines[] = $label . ': ' . self::stringifyValue($value);
+        }
+        return implode("\n", $lines);
+    }
+
+    private static function humanizeKey(string $key): string
+    {
+        $clean = str_replace(['_', '-'], ' ', trim($key));
+        $clean = preg_replace('/\s+/', ' ', (string)$clean);
+        return ucwords($clean === '' ? $key : $clean);
+    }
+
+    private static function stringifyValue(mixed $value): string
+    {
+        if (is_bool($value)) {
+            return $value ? 'yes' : 'no';
+        }
+        if (is_array($value)) {
+            $encoded = json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            return $encoded === false ? 'array' : $encoded;
+        }
+        if (is_object($value)) {
+            return method_exists($value, '__toString') ? (string)$value : 'object';
+        }
+        return (string)$value;
     }
 
     private static function levelAllowed(string $level): bool
