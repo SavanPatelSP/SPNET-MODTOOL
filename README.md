@@ -15,6 +15,7 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
 - Insights: most active, most improved, most consistent, peak hour
 - Test payments (Telegram Stars / crypto)
 - Live dashboard page (auto-refresh)
+- Manager digest dashboard (board report)
 - CSV export + Google Sheets webhook export
 - Auto-scheduled monthly reports
 - Mid-month progress reports (MTD)
@@ -263,7 +264,11 @@ http://127.0.0.1:8000/dashboard.php?token=YOUR_TOKEN
 ```text
 http://127.0.0.1:8000/dashboard.php?token=YOUR_TOKEN&chat_id=-1001234567890&month=2026-02
 ```
-4. Use filters for Impact, Consistency, Role, and toggle Source breakdown to compare Bot vs ChatKeeper/Combot imports.
+4. Manager digest (board report) page:
+```text
+http://127.0.0.1:8000/manager-digest.php?token=YOUR_TOKEN&chat_id=-1001234567890&month=2026-02&budget=5000
+```
+5. Use filters for Impact, Consistency, Role, and toggle Source breakdown to compare Bot vs ChatKeeper/Combot imports.
 
 ### 11) Import historical data (ChatKeeper/Combot)
 CLI import examples:
