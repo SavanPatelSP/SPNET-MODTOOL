@@ -12,6 +12,7 @@ use App\Services\RewardContextService;
 use App\Services\RewardHistoryService;
 use App\Services\CoachingService;
 use App\Services\HealthService;
+use App\Services\PerformanceReviewService;
 use App\Services\RosterService;
 use App\Services\ArchiveService;
 use App\Services\ReportApprovalService;
@@ -40,6 +41,7 @@ class UpdateHandler
     private RewardHistoryService $rewardHistory;
     private CoachingService $coaching;
     private HealthService $health;
+    private PerformanceReviewService $performanceReview;
     private RosterService $roster;
     private ArchiveService $archive;
     private ReportApprovalService $approvals;
@@ -70,6 +72,7 @@ class UpdateHandler
         $this->payments = new PaymentService($db, $config);
         $this->coaching = new CoachingService($this->stats, $this->settings, $config);
         $this->health = new HealthService($this->stats, $this->settings, $config);
+        $this->performanceReview = new PerformanceReviewService($this->stats, $this->settings, $config);
         $this->roster = new RosterService($db);
         $this->rewardSheet = new RewardSheet($this->stats, $this->rewards, $config, $this->rewardContext, $this->rewardHistory, $this->archive, $this->approvals);
         $this->rewardCsv = new RewardCsv($this->stats, $this->rewards, $this->rewardContext, $this->rewardHistory, $this->archive);
@@ -230,6 +233,7 @@ class UpdateHandler
             'rosteradd', 'rosterremove', 'rosterlist', 'rosterrole',
             'premium', 'benefits', 'pricing', 'guide', 'giftplan', 'grantplan', 'approval', 'approvereport', 'approvalstatus', 'auditlogcsv',
             'buy_stars_test', 'buy_crypto_test', 'paystatus', 'debughours', 'debughoursall', 'finduser', 'autoweekly', 'autoinactive', 'activityrank',
+            'aireview', 'autoaireview',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
 
@@ -347,8 +351,14 @@ class UpdateHandler
                     case 'autoinactive':
                         $this->handleAutoInactive($chatId, $targetChatId, $cleanArgs);
                         return;
+                    case 'autoaireview':
+                        $this->handleAutoAiReview($chatId, $targetChatId, $cleanArgs, $userId);
+                        return;
                     case 'activityrank':
                         $this->handleActivityRank($chatId, $targetChatId, $cleanArgs, $userId);
+                        return;
+                    case 'aireview':
+                        $this->handleAiReview($chatId, $targetChatId, $cleanArgs, $userId);
                         return;
                     case 'progress':
                         $this->handleProgressReport($chatId, $targetChatId, $cleanArgs);
@@ -1810,6 +1820,7 @@ class UpdateHandler
             '- Multi-chat rollups + per-chat breakdown',
             '- Executive summary + trend report + PDF export',
             '- Coaching tips + team health (coverage gaps, workload balance, burnout risk)',
+            '- AI performance reviews per mod (monthly feedback summaries)',
             '- Import wizard + source breakdown (Bot vs ChatKeeper/Combot)',
             '- Report archive + reward history',
             '- Owner notifications (auto report DM, mid-month progress, at-risk alerts, congrats)',
@@ -1847,6 +1858,7 @@ class UpdateHandler
             '- Fair reward engine (anti‑spam caps + day normalization)',
             '- Reward upgrades (max-share cap, stability bonus, penalty decay)',
             '- Coaching tips + team health (coverage gaps, workload balance, burnout risk)',
+            '- AI performance reviews per mod (monthly feedback summaries)',
             '- Executive summary + trend report + PDF export',
             '- Import wizard (browser upload) + source breakdown',
             '- Report archive + reward history',
@@ -2588,6 +2600,116 @@ class UpdateHandler
         $this->tg->sendMessage($responseChatId, 'Usage: /autoinactive on [days] [hour] [chat_id] | /autoinactive off [chat_id] | /autoinactive status [chat_id]', ['parse_mode' => 'HTML']);
     }
 
+    private function handleAutoAiReview(int|string $responseChatId, int|string $chatId, string $args, int|string $userId): void
+    {
+        if (!$this->isManager($userId)) {
+            $this->tg->sendMessage($responseChatId, 'Only bot managers or owners can change AI review automation.', ['parse_mode' => 'HTML']);
+            return;
+        }
+        if (!$this->requirePremium($chatId, $responseChatId)) {
+            return;
+        }
+
+        $parts = preg_split('/\s+/', trim($args));
+        $action = strtolower($parts[0] ?? 'status');
+
+        $settings = $this->settings->get($chatId);
+        if ($action === '' || $action === 'status') {
+            $status = !empty($settings['ai_review_enabled']) ? 'ON' : 'OFF';
+            $day = (int)($settings['ai_review_day'] ?? 1);
+            $hour = (int)($settings['ai_review_hour'] ?? 9);
+            $this->tg->sendMessage($responseChatId, 'AI review: ' . $status . ' | Day ' . $day . ' at ' . $hour . ':00.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        if ($action === 'on') {
+            $day = isset($parts[1]) ? (int)$parts[1] : null;
+            $hour = isset($parts[2]) ? (int)$parts[2] : null;
+            if ($day !== null && ($day < 1 || $day > 28)) {
+                $this->tg->sendMessage($responseChatId, 'Day must be between 1 and 28.', ['parse_mode' => 'HTML']);
+                return;
+            }
+            if ($hour !== null && ($hour < 0 || $hour > 23)) {
+                $this->tg->sendMessage($responseChatId, 'Hour must be between 0 and 23.', ['parse_mode' => 'HTML']);
+                return;
+            }
+            $this->settings->updateAiReview($chatId, true, $day, $hour);
+            $this->tg->sendMessage($responseChatId, 'AI review automation enabled.', ['parse_mode' => 'HTML']);
+            if ($this->shouldLog('log_commands')) {
+                Logger::infoContext('AI review automation enabled', $this->logContextForChat($chatId, [
+                    'day' => $day,
+                    'hour' => $hour,
+                ]));
+            }
+            return;
+        }
+
+        if ($action === 'off') {
+            $this->settings->updateAiReview($chatId, false, null, null);
+            $this->tg->sendMessage($responseChatId, 'AI review automation disabled.', ['parse_mode' => 'HTML']);
+            if ($this->shouldLog('log_commands')) {
+                Logger::infoContext('AI review automation disabled', $this->logContextForChat($chatId));
+            }
+            return;
+        }
+
+        $this->tg->sendMessage($responseChatId, 'Usage: /autoaireview on [day] [hour] [chat_id] | /autoaireview off [chat_id] | /autoaireview status [chat_id]', ['parse_mode' => 'HTML']);
+    }
+
+    private function handleAiReview(int|string $responseChatId, int|string $chatId, string $args, int|string $userId): void
+    {
+        if (!$this->requirePremium($chatId, $responseChatId)) {
+            return;
+        }
+        if (!$this->isManager($userId)) {
+            $this->tg->sendMessage($responseChatId, 'Only bot managers or owners can send AI performance reviews.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $month = null;
+        $tokens = preg_split('/\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^\d{4}-\d{2}$/', $token)) {
+                $month = $token;
+                break;
+            }
+        }
+
+        $report = $this->performanceReview->buildReport($chatId, $month);
+        if (empty($report['reviews'])) {
+            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $chatRow = $this->db->fetch('SELECT title FROM chats WHERE id = ? LIMIT 1', [$chatId]);
+        $chatTitle = $chatRow['title'] ?? ('Chat ' . $chatId);
+        $lines = $this->performanceReview->buildLines($report, $chatTitle);
+
+        $targets = $this->getManagerTargets();
+        if (empty($targets)) {
+            $this->tg->sendMessage($responseChatId, 'No managers configured in config.local.php (manager_user_ids).', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $this->sendChunkedMessageToTargets($targets, implode("\n", $lines));
+        if (!in_array((int)$responseChatId, $targets, true)) {
+            $this->tg->sendMessage($responseChatId, 'AI performance review sent to managers.', ['parse_mode' => 'HTML']);
+        }
+
+        if ($this->shouldLog('log_reports')) {
+            Logger::infoContext(
+                'AI performance review generated',
+                $this->logContextForChat($chatId, [
+                    'month' => $report['range']['month'] ?? null,
+                    'mods' => count($report['reviews']),
+                ])
+            );
+        }
+    }
+
     private function handleActivityRank(int|string $responseChatId, int|string $chatId, string $args, int|string $userId): void
     {
         if (!$this->isManager($userId)) {
@@ -3110,7 +3232,9 @@ class UpdateHandler
                 '/autoprogress on [day] [hour] [chat_id]',
                 '/autoweekly on [weekday] [hour] [chat_id]',
                 '/autoinactive on [days] [hour] [chat_id]',
+                '/autoaireview on [day] [hour] [chat_id]',
                 '/activityrank [chat_id] [YYYY-MM] [top]',
+                '/aireview [chat_id] [YYYY-MM]',
                 '/progress [chat_id] [budget]',
                 '/modadd [chat_id] &lt;@username|user_id&gt;',
                 '/modremove [chat_id] &lt;@username|user_id&gt;',
@@ -3183,6 +3307,7 @@ class UpdateHandler
             '<code>/finduser alex</code>',
             '<code>/finduser @alex</code>',
             '<code>/activityrank 2026-02 5</code>',
+            '<code>/aireview 2026-02</code>',
             '',
             '<b>Leaderboards</b>',
             '<code>/leaderboard</code>',
@@ -3214,6 +3339,7 @@ class UpdateHandler
             '<code>/autoprogress on 15 12</code>',
             '<code>/autoweekly on 1 10</code> (Mon 10:00)',
             '<code>/autoinactive on 7 10</code> (inactive 7d, 10:00)',
+            '<code>/autoaireview on 1 9</code> (monthly AI review)',
             '',
             '<b>Approvals + audit log</b>',
             '<code>/approval on</code>',
@@ -3247,6 +3373,42 @@ class UpdateHandler
         ]);
 
         return $parts;
+    }
+
+    private function sendChunkedMessageToTargets(array $targets, string $text, int $limit = 3500): void
+    {
+        if (empty($targets)) {
+            return;
+        }
+        $lines = explode("\n", $text);
+        $chunks = [];
+        $current = '';
+        foreach ($lines as $line) {
+            $candidate = $current === '' ? $line : $current . "\n" . $line;
+            if (strlen($candidate) > $limit) {
+                if ($current !== '') {
+                    $chunks[] = $current;
+                    $current = $line;
+                    continue;
+                }
+                $longParts = str_split($line, $limit);
+                foreach ($longParts as $part) {
+                    $chunks[] = $part;
+                }
+                $current = '';
+                continue;
+            }
+            $current = $candidate;
+        }
+        if ($current !== '') {
+            $chunks[] = $current;
+        }
+
+        foreach ($targets as $targetId) {
+            foreach ($chunks as $chunk) {
+                $this->tg->sendMessage($targetId, $chunk, ['parse_mode' => 'HTML']);
+            }
+        }
     }
 
     private function formatStatsMessage(array $stat, array $range): string

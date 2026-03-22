@@ -44,13 +44,18 @@ class SettingsService
         $inactiveEnabled = !empty($inactiveDefaults['enabled']) ? 1 : 0;
         $inactiveDays = (int)($inactiveDefaults['days'] ?? 7);
         $inactiveHour = (int)($inactiveDefaults['hour'] ?? 10);
+
+        $aiDefaults = $this->config['ai_review_defaults'] ?? [];
+        $aiEnabled = !empty($aiDefaults['enabled']) ? 1 : 0;
+        $aiDay = (int)($aiDefaults['day'] ?? 1);
+        $aiHour = (int)($aiDefaults['hour'] ?? 9);
         $approvals = $this->config['approvals'] ?? [];
         $approvalRequired = !empty($approvals['default_required']) ? 1 : 0;
 
         $this->db->exec(
-            'INSERT INTO settings (chat_id, reward_budget, timezone, active_gap_minutes, active_floor_minutes, auto_report_enabled, auto_report_day, auto_report_hour, progress_report_enabled, progress_report_day, progress_report_hour, weekly_summary_enabled, weekly_summary_weekday, weekly_summary_hour, inactivity_alert_enabled, inactivity_alert_days, inactivity_alert_hour, approval_required, updated_at)
-             VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [$chatId, $timezone, $gap, $floor, $autoEnabled, $autoDay, $autoHour, $progressEnabled, $progressDay, $progressHour, $weeklyEnabled, $weeklyWeekday, $weeklyHour, $inactiveEnabled, $inactiveDays, $inactiveHour, $approvalRequired, $this->nowUtc()]
+            'INSERT INTO settings (chat_id, reward_budget, timezone, active_gap_minutes, active_floor_minutes, auto_report_enabled, auto_report_day, auto_report_hour, progress_report_enabled, progress_report_day, progress_report_hour, weekly_summary_enabled, weekly_summary_weekday, weekly_summary_hour, inactivity_alert_enabled, inactivity_alert_days, inactivity_alert_hour, ai_review_enabled, ai_review_day, ai_review_hour, approval_required, updated_at)
+             VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [$chatId, $timezone, $gap, $floor, $autoEnabled, $autoDay, $autoHour, $progressEnabled, $progressDay, $progressHour, $weeklyEnabled, $weeklyWeekday, $weeklyHour, $inactiveEnabled, $inactiveDays, $inactiveHour, $aiEnabled, $aiDay, $aiHour, $approvalRequired, $this->nowUtc()]
         );
 
         return [
@@ -71,6 +76,9 @@ class SettingsService
             'inactivity_alert_enabled' => $inactiveEnabled,
             'inactivity_alert_days' => $inactiveDays,
             'inactivity_alert_hour' => $inactiveHour,
+            'ai_review_enabled' => $aiEnabled,
+            'ai_review_day' => $aiDay,
+            'ai_review_hour' => $aiHour,
             'approval_required' => $approvalRequired,
         ];
     }
@@ -205,6 +213,33 @@ class SettingsService
         $params[] = $chatId;
         $sql = 'UPDATE settings SET ' . implode(', ', $fields) . ' WHERE chat_id = ?';
         $this->db->exec($sql, $params);
+    }
+
+    public function updateAiReview(int|string $chatId, bool $enabled, ?int $day, ?int $hour): void
+    {
+        $fields = ['ai_review_enabled = ?', 'updated_at = ?'];
+        $params = [$enabled ? 1 : 0, $this->nowUtc()];
+
+        if ($day !== null) {
+            $fields[] = 'ai_review_day = ?';
+            $params[] = $day;
+        }
+        if ($hour !== null) {
+            $fields[] = 'ai_review_hour = ?';
+            $params[] = $hour;
+        }
+
+        $params[] = $chatId;
+        $sql = 'UPDATE settings SET ' . implode(', ', $fields) . ' WHERE chat_id = ?';
+        $this->db->exec($sql, $params);
+    }
+
+    public function updateAiReviewLast(int|string $chatId, string $month): void
+    {
+        $this->db->exec(
+            'UPDATE settings SET ai_review_last_month = ?, ai_review_last_sent_at = ?, updated_at = ? WHERE chat_id = ?',
+            [$month, $this->nowUtc(), $this->nowUtc(), $chatId]
+        );
     }
 
     private function nowUtc(): string

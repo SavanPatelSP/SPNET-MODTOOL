@@ -63,11 +63,17 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
    - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/013_audit_log.sql`
 15. Run the payments migration:
    - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/014_payments.sql`
-16. Copy config overrides:
+16. Run the weekly summary migration:
+   - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/015_weekly_summary.sql`
+17. Run the inactivity alerts migration:
+   - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/016_inactivity_alerts.sql`
+18. Run the AI review migration:
+   - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/017_ai_review.sql`
+19. Copy config overrides:
    - `cp /Users/savanpatel/Documents/SPNET-MODTOOL/config.example.php /Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php`
-17. Edit `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` with your bot token and DB creds.
+20. Edit `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` with your bot token and DB creds.
     - Optional: add `owner_user_ids` and `manager_user_ids` for staff access.
-18. Run in long-poll mode:
+21. Run in long-poll mode:
    - `php /Users/savanpatel/Documents/SPNET-MODTOOL/bin/poll.php`
 
 ## Commands
@@ -100,6 +106,7 @@ Private chat commands:
 - `/paystatus` (latest payment)
 - `/coach [YYYY-MM]` (premium)
 - `/health [YYYY-MM]` (premium)
+- `/aireview [YYYY-MM]` (premium AI performance review)
 - `/trend [YYYY-MM] [budget]` (premium)
 - `/execsummary [YYYY-MM] [budget]` (premium)
 - `/archive`
@@ -108,6 +115,8 @@ Private chat commands:
 - `/setactivity <gap_minutes> <floor_minutes> [chat_id]`
 - `/autoreport on [day] [hour] [chat_id]`
 - `/autoreport off [chat_id]`
+- `/autoaireview on [day] [hour] [chat_id]`
+- `/autoaireview off [chat_id]`
 - `/autoreport status [chat_id]`
 - `/autoprogress on [day] [hour] [chat_id]`
 - `/autoprogress off [chat_id]`
@@ -193,6 +202,12 @@ If you do not pass a budget, it will still rank mods and output reward suggestio
 /execsummary 2026-02 5000
 ```
 
+### 7b) AI performance reviews (premium)
+Auto-generate per-mod feedback summaries:
+```text
+/aireview 2026-02
+```
+
 ### 8) Budget and scoring controls
 ```text
 /setbudget 8000
@@ -205,6 +220,7 @@ Enable monthly reports and mid-month progress:
 ```text
 /autoreport on 1 9
 /autoprogress on 15 12
+/autoaireview on 1 9
 ```
 The scheduler must run hourly:
 ```text

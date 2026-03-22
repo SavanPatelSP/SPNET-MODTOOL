@@ -12,6 +12,7 @@ use App\Services\RewardHistoryService;
 use App\Services\ArchiveService;
 use App\Services\SubscriptionService;
 use App\Services\NotificationService;
+use App\Services\PerformanceReviewService;
 use App\Reports\RewardSheet;
 use App\Logger;
 use App\Services\ChangelogService;
@@ -35,7 +36,39 @@ $rewardHistory = new RewardHistoryService($db);
 $archive = new ArchiveService($db);
 $subscriptions = new SubscriptionService($db, $config);
 $notifications = new NotificationService($db);
+$performanceReview = new PerformanceReviewService($statsService, $settingsService, $config);
 $rewardSheet = new RewardSheet($statsService, $rewardService, $config, $rewardContext, $rewardHistory, $archive);
+
+function sendChunkedMessage(Telegram $tg, int|string $chatId, string $text, int $limit = 3500): void
+{
+    $lines = explode("\n", $text);
+    $chunks = [];
+    $current = '';
+    foreach ($lines as $line) {
+        $candidate = $current === '' ? $line : $current . "\n" . $line;
+        if (strlen($candidate) > $limit) {
+            if ($current !== '') {
+                $chunks[] = $current;
+                $current = $line;
+                continue;
+            }
+            $longParts = str_split($line, $limit);
+            foreach ($longParts as $part) {
+                $chunks[] = $part;
+            }
+            $current = '';
+            continue;
+        }
+        $current = $candidate;
+    }
+    if ($current !== '') {
+        $chunks[] = $current;
+    }
+
+    foreach ($chunks as $chunk) {
+        $tg->sendMessage($chatId, $chunk, ['parse_mode' => 'HTML']);
+    }
+}
 
 $ownerIds = $config['owner_user_ids'] ?? [];
 $ownerIds = array_values(array_filter(array_map('intval', is_array($ownerIds) ? $ownerIds : [])));
@@ -46,9 +79,9 @@ $midMonthEnabled = (bool)($config['premium']['notifications']['mid_month_alert']
 $congratsEnabled = (bool)($config['premium']['notifications']['congrats'] ?? true);
 
 try {
-    $rows = $db->fetchAll('SELECT * FROM settings WHERE auto_report_enabled = 1 OR progress_report_enabled = 1 OR weekly_summary_enabled = 1 OR inactivity_alert_enabled = 1');
+    $rows = $db->fetchAll('SELECT * FROM settings WHERE auto_report_enabled = 1 OR progress_report_enabled = 1 OR weekly_summary_enabled = 1 OR inactivity_alert_enabled = 1 OR ai_review_enabled = 1');
 } catch (Throwable $e) {
-    echo "Report columns missing. Run migrations/002_auto_reports.sql, migrations/006_progress_reports.sql, migrations/015_weekly_summary.sql, and migrations/016_inactivity_alerts.sql\n";
+    echo "Report columns missing. Run migrations/002_auto_reports.sql, migrations/006_progress_reports.sql, migrations/015_weekly_summary.sql, migrations/016_inactivity_alerts.sql, and migrations/017_ai_review.sql\n";
     exit(1);
 }
 
@@ -100,6 +133,41 @@ foreach ($rows as $row) {
                         }
                     } else {
                         Logger::error('Auto report failed for chat ' . $chatId);
+                    }
+                }
+            }
+        }
+    }
+
+    if (!empty($row['ai_review_enabled'])) {
+        $day = (int)($row['ai_review_day'] ?? 1);
+        $hour = (int)($row['ai_review_hour'] ?? 9);
+
+        if ($currentDay >= $day && $currentHour >= $hour) {
+            $targetMonth = $nowLocal->modify('first day of last month')->format('Y-m');
+            if (empty($row['ai_review_last_month']) || $row['ai_review_last_month'] !== $targetMonth) {
+                if (!$isPremium) {
+                    Logger::info('AI review skipped for chat ' . $chatId . ' (not premium)');
+                } else {
+                    $report = $performanceReview->buildReport($chatId, $targetMonth);
+                    if (empty($report['reviews'])) {
+                        Logger::info('AI review skipped for chat ' . $chatId . ' (no mods)');
+                    } else {
+                        $chatRow = $db->fetch('SELECT title FROM chats WHERE id = ? LIMIT 1', [$chatId]);
+                        $chatTitle = $chatRow['title'] ?? ('Chat ' . $chatId);
+                        $lines = $performanceReview->buildLines($report, $chatTitle);
+                        $message = implode("\n", $lines);
+
+                        $targets = !empty($managerIds) ? $managerIds : $ownerIds;
+                        if (empty($targets)) {
+                            Logger::info('AI review skipped for chat ' . $chatId . ' (no managers)');
+                        } else {
+                            foreach ($targets as $managerId) {
+                                sendChunkedMessage($tg, $managerId, $message);
+                            }
+                            $settingsService->updateAiReviewLast($chatId, $targetMonth);
+                            Logger::info('AI review sent for chat ' . $chatId . ' month ' . $targetMonth);
+                        }
                     }
                 }
             }

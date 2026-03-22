@@ -197,6 +197,21 @@ return [
         'hour' => 10,
     ],
 
+    // AI performance review defaults (monthly feedback summary)
+    'ai_review_defaults' => [
+        'enabled' => false,
+        'day' => 1,
+        'hour' => 9,
+    ],
+
+    // AI review tuning (optional)
+    'ai_review' => [
+        'low_consistency' => 35,
+        'high_consistency' => 60,
+        'trend_good' => 5,
+        'trend_bad' => -5,
+    ],
+
     // Report branding
     'report' => [
         'brand_name' => 'SP NET MOD TOOL',
