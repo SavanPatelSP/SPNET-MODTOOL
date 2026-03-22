@@ -3949,6 +3949,7 @@ class UpdateHandler
             '<code>https://YOUR_DOMAIN/?token=YOUR_TOKEN</code>',
             '<code>http://127.0.0.1:8000/dashboard.php?token=YOUR_TOKEN</code>',
             '<code>http://127.0.0.1:8000/manager-digest.php?token=YOUR_TOKEN</code> (manager digest)',
+            '<code>http://127.0.0.1:8000/manager-digest.php?token=YOUR_TOKEN&amp;format=pdf</code> (digest PDF)',
             'Tip: add <code>&amp;chat_id=...&amp;month=YYYY-MM&amp;budget=5000</code>',
             'Dashboard highlights show badges (Top Helper, Most Balanced, Consistency King, Fast Responder).',
             '',

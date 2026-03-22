@@ -595,6 +595,78 @@ class StatsService
         return $hours;
     }
 
+    public function getCoverageHeatmap(int|string $chatId, array $range, string $timezone, int $minMods = 1): array
+    {
+        $minMods = max(1, (int)$minMods);
+        $messageGrid = array_fill(0, 7, array_fill(0, 24, 0));
+        $modSets = array_fill(0, 7, array_fill(0, 24, []));
+
+        $mods = $this->getMods($chatId);
+        if (empty($mods)) {
+            return [
+                'messages' => $messageGrid,
+                'mods' => array_fill(0, 7, array_fill(0, 24, 0)),
+                'coverage_pct' => 0.0,
+                'max_mods' => 0,
+                'gaps' => [],
+            ];
+        }
+
+        $modIds = array_map(fn($mod) => (int)$mod['user_id'], $mods);
+        $modPlaceholders = implode(',', array_fill(0, count($modIds), '?'));
+        $rows = $this->db->fetchAll(
+            'SELECT user_id, sent_at FROM messages WHERE chat_id = ? AND sent_at >= ? AND sent_at < ? AND user_id IN (' . $modPlaceholders . ')',
+            array_merge([$chatId, $range['start_utc'], $range['end_utc']], $modIds)
+        );
+
+        $tz = new DateTimeZone($timezone);
+        foreach ($rows as $row) {
+            $dt = new DateTimeImmutable($row['sent_at'], new DateTimeZone('UTC'));
+            $dt = $dt->setTimezone($tz);
+            $dow = (int)$dt->format('N') - 1; // 0=Mon
+            $hour = (int)$dt->format('G');
+            $messageGrid[$dow][$hour]++;
+            $modSets[$dow][$hour][(int)$row['user_id']] = true;
+        }
+
+        $modGrid = array_fill(0, 7, array_fill(0, 24, 0));
+        $maxMods = 0;
+        $gaps = [];
+        $covered = 0;
+        $totalSlots = 7 * 24;
+
+        for ($d = 0; $d < 7; $d++) {
+            for ($h = 0; $h < 24; $h++) {
+                $count = count($modSets[$d][$h]);
+                $modGrid[$d][$h] = $count;
+                if ($count > $maxMods) {
+                    $maxMods = $count;
+                }
+                if ($count >= $minMods) {
+                    $covered++;
+                } else {
+                    $gaps[] = [
+                        'day' => $d,
+                        'hour' => $h,
+                        'mods' => $count,
+                        'messages' => $messageGrid[$d][$h],
+                    ];
+                }
+            }
+        }
+
+        usort($gaps, fn($a, $b) => ($a['mods'] <=> $b['mods']) ?: ($a['messages'] <=> $b['messages']));
+        $coveragePct = $totalSlots > 0 ? round(($covered / $totalSlots) * 100, 1) : 0.0;
+
+        return [
+            'messages' => $messageGrid,
+            'mods' => $modGrid,
+            'coverage_pct' => $coveragePct,
+            'max_mods' => $maxMods,
+            'gaps' => $gaps,
+        ];
+    }
+
     private function getExternalStatsMap(int|string $chatId, string $month): array
     {
         $rows = $this->db->fetchAll(

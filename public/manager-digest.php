@@ -9,6 +9,7 @@ use App\Services\RewardService;
 use App\Services\RewardContextService;
 use App\Services\RetentionRiskService;
 use App\Services\AuditLogService;
+use App\Services\PdfService;
 
 $dashboardConfig = $config['dashboard'] ?? [];
 $token = $dashboardConfig['token'] ?? null;
@@ -37,6 +38,7 @@ $retentionRisk = new RetentionRiskService($statsService, $settingsService, $conf
 $chatId = $_GET['chat_id'] ?? ($dashboardConfig['default_chat_id'] ?? null);
 $month = $_GET['month'] ?? null;
 $budgetOverride = isset($_GET['budget']) ? (float)$_GET['budget'] : null;
+$renderPdf = (($_GET['format'] ?? '') === 'pdf');
 
 $chats = $db->fetchAll('SELECT id, title, type FROM chats ORDER BY title ASC');
 if (!$chatId && !empty($chats)) {
@@ -66,6 +68,10 @@ $context['chat_id'] = (int)$chatId;
 $context['month'] = $range['month'] ?? $month;
 $context['source'] = 'manager_digest';
 $ranked = $rewardService->rankAndReward($bundle['mods'], $budget, $context);
+$pdfUrl = 'manager-digest.php?' . http_build_query(array_merge(
+    ['token' => $token, 'chat_id' => $chatId, 'month' => $range['month'] ?? $month, 'format' => 'pdf'],
+    $budgetOverride !== null ? ['budget' => $budgetOverride] : []
+));
 
 usort($ranked, fn($a, $b) => ($b['reward'] ?? 0) <=> ($a['reward'] ?? 0));
 $topMods = array_slice($ranked, 0, 5);
@@ -120,6 +126,50 @@ foreach ($recentStats['mods'] ?? [] as $mod) {
 }
 $inactiveMods = array_slice($inactiveMods, 0, 6);
 
+$actionQualityConfig = $config['action_quality'] ?? [];
+$qualityThreshold = (float)($actionQualityConfig['actions_per_1k'] ?? 30);
+$qualityMinMessages = (int)($actionQualityConfig['min_messages'] ?? 50);
+$qualityMinActions = (int)($actionQualityConfig['min_actions'] ?? 3);
+$actionQualityAlerts = [];
+foreach ($bundle['mods'] as $mod) {
+    $messages = (int)($mod['messages'] ?? 0);
+    $actions = (int)($mod['warnings'] ?? 0) + (int)($mod['mutes'] ?? 0) + (int)($mod['bans'] ?? 0);
+    if ($messages < $qualityMinMessages || $actions < $qualityMinActions) {
+        continue;
+    }
+    $per1k = $messages > 0 ? ($actions / $messages) * 1000 : 0;
+    if ($per1k >= $qualityThreshold) {
+        $actionQualityAlerts[] = [
+            'name' => $mod['display_name'],
+            'per1k' => $per1k,
+            'actions' => $actions,
+            'messages' => $messages,
+        ];
+    }
+}
+usort($actionQualityAlerts, fn($a, $b) => $b['per1k'] <=> $a['per1k']);
+$actionQualityAlerts = array_slice($actionQualityAlerts, 0, 6);
+
+$coverageConfig = $config['coverage'] ?? [];
+$coverageMinMods = (int)($coverageConfig['min_mods_per_hour'] ?? 1);
+$coverageMap = $statsService->getCoverageHeatmap($chatId, $range, $timezone, $coverageMinMods);
+$coverageScore = (float)($coverageMap['coverage_pct'] ?? 0);
+$coverageGaps = array_slice($coverageMap['gaps'] ?? [], 0, 8);
+$coverageMax = (int)($coverageMap['max_mods'] ?? 0);
+
+$retentionContributors = buildRetentionContributors($bundle['mods']);
+$workloadBalanceScore = computeWorkloadBalanceScore($bundle['mods']);
+$avgConsistency = (float)($summary['avg_consistency'] ?? 0);
+$teamHealthScore = round(($avgConsistency * 0.4) + ($coverageScore * 0.35) + ($workloadBalanceScore * 0.25), 1);
+$teamHealthLabel = 'At Risk';
+if ($teamHealthScore >= 80) {
+    $teamHealthLabel = 'Great';
+} elseif ($teamHealthScore >= 60) {
+    $teamHealthLabel = 'Stable';
+} elseif ($teamHealthScore >= 40) {
+    $teamHealthLabel = 'Needs Attention';
+}
+
 function percentDrop(?float $current, ?float $previous): ?float
 {
     if ($previous === null || $previous <= 0) {
@@ -130,6 +180,71 @@ function percentDrop(?float $current, ?float $previous): ?float
         return 0.0;
     }
     return round($drop, 1);
+}
+
+function computeWorkloadBalanceScore(array $mods): float
+{
+    $total = 0.0;
+    foreach ($mods as $mod) {
+        $total += (float)($mod['active_minutes'] ?? 0);
+    }
+    if ($total <= 0) {
+        return 0.0;
+    }
+    $sorted = $mods;
+    usort($sorted, fn($a, $b) => ($b['active_minutes'] ?? 0) <=> ($a['active_minutes'] ?? 0));
+    $topTotal = 0.0;
+    foreach (array_slice($sorted, 0, 3) as $mod) {
+        $topTotal += (float)($mod['active_minutes'] ?? 0);
+    }
+    $share = $topTotal / $total;
+    if ($share <= 0.45) {
+        return 100.0;
+    }
+    if ($share >= 0.80) {
+        return 20.0;
+    }
+    $slope = 80 / (0.80 - 0.45);
+    $score = 100 - (($share - 0.45) * $slope);
+    return max(20.0, min(100.0, round($score, 1)));
+}
+
+function buildRetentionContributors(array $mods): array
+{
+    if (empty($mods)) {
+        return [];
+    }
+    $maxImpact = 0.0;
+    $maxActive = 0.0;
+    foreach ($mods as $mod) {
+        $impact = (float)($mod['impact_score'] ?? 0);
+        $active = (float)($mod['active_minutes'] ?? 0);
+        if ($impact > $maxImpact) {
+            $maxImpact = $impact;
+        }
+        if ($active > $maxActive) {
+            $maxActive = $active;
+        }
+    }
+    $maxImpact = max(1.0, $maxImpact);
+    $maxActive = max(1.0, $maxActive);
+
+    $contributors = [];
+    foreach ($mods as $mod) {
+        $consistency = (float)($mod['consistency_index'] ?? 0);
+        $impact = (float)($mod['impact_score'] ?? 0);
+        $active = (float)($mod['active_minutes'] ?? 0);
+        $score = ($consistency / 100) * 0.4 + ($impact / $maxImpact) * 0.3 + ($active / $maxActive) * 0.3;
+        $contributors[] = [
+            'name' => $mod['display_name'],
+            'score' => $score,
+            'consistency' => $consistency,
+            'impact' => $impact,
+            'active_hours' => $active / 60,
+        ];
+    }
+    usort($contributors, fn($a, $b) => $b['score'] <=> $a['score']);
+    return array_slice($contributors, 0, 5);
 }
 
 $spikeDefaults = $config['inactivity_spike_defaults'] ?? [];
@@ -190,9 +305,15 @@ for ($i = 0; $i < 8; $i++) {
     $cursor = $cursor->modify('-1 month');
 }
 
+$dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
 $accent = $config['report']['accent_color'] ?? '#ff7a59';
 $secondary = $config['report']['secondary_color'] ?? '#1f2a44';
 $brand = $config['report']['brand_name'] ?? 'SP NET MOD TOOL';
+
+if ($renderPdf) {
+    ob_start();
+}
 
 ?>
 <!doctype html>
@@ -382,6 +503,41 @@ th {
     gap: 6px;
     font-size: 13px;
 }
+.heatmap {
+    display: grid;
+    gap: 8px;
+}
+.heat-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.heat-label {
+    width: 32px;
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+.heat-cells {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(24, minmax(10px, 1fr));
+    gap: 2px;
+}
+.heat-cell {
+    height: 14px;
+    border-radius: 3px;
+    background: #f1f5f9;
+    border: 1px solid #eef2f7;
+}
+.heat-legend {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 8px;
+}
 @media (max-width: 900px) {
     .hero {
         grid-template-columns: 1fr;
@@ -435,6 +591,7 @@ th {
                 </div>
                 <div style="margin-top:10px;">
                     <button class="button primary" type="submit">Update</button>
+                    <a class="button" href="<?php echo htmlspecialchars($pdfUrl, ENT_QUOTES, 'UTF-8'); ?>">Download PDF</a>
                 </div>
             </form>
         </div>
@@ -460,6 +617,11 @@ th {
             <h3>Reward Pool</h3>
             <div class="value"><?php echo number_format($budget, 2); ?></div>
             <div class="muted">Recommended payout <?php echo number_format($rewardTotal, 2); ?></div>
+        </div>
+        <div class="card">
+            <h3>Team Health</h3>
+            <div class="value"><?php echo number_format($teamHealthScore, 1); ?></div>
+            <div class="muted"><?php echo htmlspecialchars($teamHealthLabel, ENT_QUOTES, 'UTF-8'); ?> · Balance <?php echo number_format($workloadBalanceScore, 1); ?>%</div>
         </div>
     </div>
 
@@ -557,6 +719,101 @@ th {
             <div class="muted" style="margin-top:8px;">Threshold <?php echo number_format($spikeThreshold, 0); ?>% drop.</div>
         </div>
     </div>
+
+    <div class="grid">
+        <div class="card">
+            <div class="section-title">Action Quality Review</div>
+            <?php if (empty($actionQualityAlerts)): ?>
+                <div class="muted">No potential over-moderation flagged.</div>
+            <?php else: ?>
+                <div class="list">
+                    <?php foreach ($actionQualityAlerts as $alert): ?>
+                        <div>
+                            <?php echo htmlspecialchars($alert['name'], ENT_QUOTES, 'UTF-8'); ?>
+                            <span class="muted">(<?php echo number_format($alert['per1k'], 1); ?> per 1k msgs · <?php echo (int)$alert['actions']; ?> actions)</span>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+            <div class="muted" style="margin-top:8px;">Threshold <?php echo number_format($qualityThreshold, 0); ?> actions per 1k msgs.</div>
+        </div>
+
+        <div class="card">
+            <div class="section-title">Top Contributors to Retention</div>
+            <?php if (empty($retentionContributors)): ?>
+                <div class="muted">Not enough data yet.</div>
+            <?php else: ?>
+                <div class="list">
+                    <?php foreach ($retentionContributors as $contrib): ?>
+                        <div>
+                            <?php echo htmlspecialchars($contrib['name'], ENT_QUOTES, 'UTF-8'); ?>
+                            <span class="muted">(<?php echo number_format($contrib['score'] * 100, 1); ?>% index · <?php echo number_format($contrib['active_hours'], 1); ?>h)</span>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+            <div class="muted" style="margin-top:8px;">Proxy score based on consistency, impact, and active hours.</div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="section-title">Shift Coverage Map</div>
+        <div class="heatmap">
+            <?php for ($d = 0; $d < 7; $d++): ?>
+                <div class="heat-row">
+                    <div class="heat-label"><?php echo htmlspecialchars($dayLabels[$d], ENT_QUOTES, 'UTF-8'); ?></div>
+                    <div class="heat-cells">
+                        <?php for ($h = 0; $h < 24; $h++): ?>
+                            <?php
+                                $count = $coverageMap['mods'][$d][$h] ?? 0;
+                                $intensity = $coverageMax > 0 ? ($count / $coverageMax) : 0;
+                                $alpha = 0.12 + (0.88 * $intensity);
+                                $label = $dayLabels[$d] . ' ' . str_pad((string)$h, 2, '0', STR_PAD_LEFT) . ':00 · ' . $count . ' mods';
+                            ?>
+                            <div class="heat-cell" style="background: rgba(255, 122, 89, <?php echo number_format($alpha, 3); ?>);" title="<?php echo htmlspecialchars($label, ENT_QUOTES, 'UTF-8'); ?>"></div>
+                        <?php endfor; ?>
+                    </div>
+                </div>
+            <?php endfor; ?>
+        </div>
+        <div class="heat-legend">
+            <span>Low</span>
+            <span>High coverage</span>
+        </div>
+        <div class="muted" style="margin-top:10px;">Coverage score <?php echo number_format($coverageScore, 1); ?>% · Gap threshold <?php echo (int)$coverageMinMods; ?> mod<?php echo $coverageMinMods === 1 ? '' : 's'; ?>/hour.</div>
+        <?php if (!empty($coverageGaps)): ?>
+            <div class="list" style="margin-top:10px;">
+                <?php foreach ($coverageGaps as $gap): ?>
+                    <div>
+                        <?php echo htmlspecialchars($dayLabels[$gap['day']] ?? '', ENT_QUOTES, 'UTF-8'); ?>
+                        <?php echo str_pad((string)$gap['hour'], 2, '0', STR_PAD_LEFT); ?>:00
+                        <span class="muted">(<?php echo (int)$gap['mods']; ?> mods · <?php echo (int)$gap['messages']; ?> msgs)</span>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        <?php else: ?>
+            <div class="muted" style="margin-top:10px;">No coverage gaps detected.</div>
+        <?php endif; ?>
+    </div>
 </div>
 </body>
 </html>
+<?php
+if ($renderPdf) {
+    $html = ob_get_clean();
+    $safeMonth = $range['month'] ?? ($month ?? 'current');
+    $file = __DIR__ . '/../storage/reports/manager-digest-' . $chatId . '-' . $safeMonth . '.html';
+    file_put_contents($file, $html);
+    $pdfFile = preg_replace('/\\.html$/', '.pdf', $file);
+    $pdf = new PdfService();
+    if ($pdfFile && $pdf->htmlToPdf($file, $pdfFile)) {
+        header('Content-Type: application/pdf');
+        header('Content-Disposition: attachment; filename="' . basename($pdfFile) . '"');
+        readfile($pdfFile);
+    } else {
+        header('Content-Type: text/plain');
+        echo 'PDF engine not available. Please install wkhtmltopdf.';
+    }
+    exit;
+}
+?>

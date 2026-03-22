@@ -112,6 +112,18 @@ return [
     'impact_recency_days' => 7,
     'impact_recency_multiplier' => 1.1,
 
+    // Action quality review (over-moderation)
+    'action_quality' => [
+        'actions_per_1k' => 30,
+        'min_messages' => 50,
+        'min_actions' => 3,
+    ],
+
+    // Coverage map (gap alerts)
+    'coverage' => [
+        'min_mods_per_hour' => 1,
+    ],
+
     // Premium feature defaults
     'premium' => [
         'enabled' => true,

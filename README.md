@@ -18,6 +18,7 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
 - Test payments (Telegram Stars / crypto)
 - Live dashboard page (auto-refresh)
 - Manager digest dashboard (board report)
+- Manager digest PDF export
 - CSV export + Google Sheets webhook export
 - Auto-scheduled monthly reports
 - Mid-month progress reports (MTD)
@@ -26,6 +27,8 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
 - External stats import (ChatKeeper/Combot)
 - Premium subscriptions (plan gating + upgrades)
 - Coaching tips + team health insights
+- Team health score + coverage map + action quality review
+- Retention contributors (proxy score)
 - Executive summary + trend report + PDF export
 - Import wizard (dashboard upload)
 - Mod roster manager + report archive

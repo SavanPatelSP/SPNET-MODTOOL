@@ -588,6 +588,7 @@ $execExportUrl = 'export.php?' . http_build_query(array_merge(['type' => 'execut
 $trendExportUrl = 'export.php?' . http_build_query(array_merge(['type' => 'trend'], $exportBase));
 $summaryExportUrl = 'export.php?' . http_build_query(array_merge(['type' => 'summary', 'token' => $token, 'month' => $bundle['range']['month'] ?? ''], $budgetOverride !== null ? ['budget' => $budgetOverride] : []));
 $managerDigestUrl = 'manager-digest.php?' . http_build_query(array_merge(['token' => $token, 'chat_id' => $chatId, 'month' => $bundle['range']['month'] ?? ''], $budgetOverride !== null ? ['budget' => $budgetOverride] : []));
+$managerDigestPdfUrl = 'manager-digest.php?' . http_build_query(array_merge(['token' => $token, 'chat_id' => $chatId, 'month' => $bundle['range']['month'] ?? '', 'format' => 'pdf'], $budgetOverride !== null ? ['budget' => $budgetOverride] : []));
 $importUrl = 'import.php?' . http_build_query([
     'token' => $token,
     'chat_id' => $chatId,
@@ -1072,6 +1073,7 @@ label.check {
                 <a class="button ghost" href="<?php echo htmlspecialchars($summaryExportUrl, ENT_QUOTES, 'UTF-8'); ?>">Multi-Chat Summary</a>
                 <?php if (!$isAll): ?>
                     <a class="button ghost" href="<?php echo htmlspecialchars($managerDigestUrl, ENT_QUOTES, 'UTF-8'); ?>">Manager Digest</a>
+                    <a class="button ghost" href="<?php echo htmlspecialchars($managerDigestPdfUrl, ENT_QUOTES, 'UTF-8'); ?>">Manager Digest (PDF)</a>
                 <?php endif; ?>
             </div>
             <div class="hint">Exports use the selected chat and month. Filters only change the leaderboard view.</div>
