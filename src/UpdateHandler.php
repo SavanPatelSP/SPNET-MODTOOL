@@ -239,7 +239,7 @@ class UpdateHandler
             'rosteradd', 'rosterremove', 'rosterlist', 'rosterrole',
             'premium', 'benefits', 'pricing', 'guide', 'giftplan', 'grantplan', 'approval', 'approvereport', 'approvalstatus', 'auditlogcsv',
             'buy_stars_test', 'buy_crypto_test', 'paystatus', 'debughours', 'debughoursall', 'finduser', 'autoweekly', 'autoinactive', 'activityrank',
-            'aireview', 'autoaireview', 'retention', 'autoretention', 'timesheet', 'compare',
+            'aireview', 'autoaireview', 'retention', 'autoretention', 'timesheet', 'compare', 'weeklysummary', 'autospike',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
 
@@ -371,6 +371,12 @@ class UpdateHandler
                         return;
                     case 'retention':
                         $this->handleRetentionAlert($chatId, $targetChatId, $cleanArgs, $userId);
+                        return;
+                    case 'weeklysummary':
+                        $this->handleWeeklySummaryManual($chatId, $targetChatId, $cleanArgs, $userId);
+                        return;
+                    case 'autospike':
+                        $this->handleAutoSpike($chatId, $targetChatId, $cleanArgs, $userId);
                         return;
                     case 'progress':
                         $this->handleProgressReport($chatId, $targetChatId, $cleanArgs);
@@ -2028,6 +2034,7 @@ class UpdateHandler
             '- Coaching tips + team health (coverage gaps, workload balance, burnout risk)',
             '- AI performance reviews per mod (monthly feedback summaries)',
             '- Retention risk alerts (month-over-month drop detection)',
+            '- Inactivity spike alerts (rolling 7‑day drop vs previous)',
             '- Import wizard + source breakdown (Bot vs ChatKeeper/Combot)',
             '- Report archive + reward history',
             '- Owner notifications (auto report DM, mid-month progress, at-risk alerts, congrats)',
@@ -2067,6 +2074,7 @@ class UpdateHandler
             '- Coaching tips + team health (coverage gaps, workload balance, burnout risk)',
             '- AI performance reviews per mod (monthly feedback summaries)',
             '- Retention risk alerts (month-over-month drop detection)',
+            '- Inactivity spike alerts (rolling 7‑day drop vs previous)',
             '- Executive summary + trend report + PDF export',
             '- Import wizard (browser upload) + source breakdown',
             '- Report archive + reward history',
@@ -3040,6 +3048,163 @@ class UpdateHandler
         }
     }
 
+    private function handleWeeklySummaryManual(int|string $responseChatId, int|string $chatId, string $args, int|string $userId): void
+    {
+        if (!$this->isManager($userId)) {
+            $this->tg->sendMessage($responseChatId, 'Only bot managers or owners can send weekly summaries.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $days = 7;
+        $tokens = preg_split('/\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (is_numeric($token)) {
+                $days = (int)$token;
+            }
+        }
+        $days = max(3, min(30, $days));
+
+        $stats = $this->stats->getRollingStats($chatId, $days);
+        if (empty($stats['mods'])) {
+            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $lines = $this->buildWeeklySummaryLines($chatId, $stats, $days);
+        $targets = $this->getManagerTargets();
+        if (empty($targets)) {
+            $this->tg->sendMessage($responseChatId, 'No managers configured in config.local.php (manager_user_ids).', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $this->sendChunkedMessageToTargets($targets, implode("\n", $lines));
+        if (!in_array((int)$responseChatId, $targets, true)) {
+            $this->tg->sendMessage($responseChatId, 'Weekly summary sent to managers.', ['parse_mode' => 'HTML']);
+        }
+    }
+
+    private function handleAutoSpike(int|string $responseChatId, int|string $chatId, string $args, int|string $userId): void
+    {
+        if (!$this->isManager($userId)) {
+            $this->tg->sendMessage($responseChatId, 'Only bot managers or owners can change inactivity spike alerts.', ['parse_mode' => 'HTML']);
+            return;
+        }
+        if (!$this->requirePremium($chatId, $responseChatId)) {
+            return;
+        }
+
+        $parts = preg_split('/\s+/', trim($args));
+        $action = strtolower($parts[0] ?? 'status');
+        $settings = $this->settings->get($chatId);
+
+        if ($action === '' || $action === 'status') {
+            $status = !empty($settings['inactivity_spike_enabled']) ? 'ON' : 'OFF';
+            $hour = (int)($settings['inactivity_spike_hour'] ?? 10);
+            $threshold = (float)($settings['inactivity_spike_threshold'] ?? 35);
+            $this->tg->sendMessage($responseChatId, 'Inactivity spike alerts: ' . $status . ' | Hour ' . $hour . ':00 | ' . number_format($threshold, 0) . '% drop.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        if ($action === 'on') {
+            $hour = isset($parts[1]) ? (int)$parts[1] : null;
+            $threshold = isset($parts[2]) ? $this->parsePercent($parts[2]) : null;
+            if ($hour !== null && ($hour < 0 || $hour > 23)) {
+                $this->tg->sendMessage($responseChatId, 'Hour must be between 0 and 23.', ['parse_mode' => 'HTML']);
+                return;
+            }
+            if ($threshold !== null && ($threshold < 5 || $threshold > 90)) {
+                $this->tg->sendMessage($responseChatId, 'Threshold must be between 5 and 90.', ['parse_mode' => 'HTML']);
+                return;
+            }
+            $this->settings->updateInactivitySpike($chatId, true, $hour, $threshold);
+            $this->tg->sendMessage($responseChatId, 'Inactivity spike alerts enabled.', ['parse_mode' => 'HTML']);
+            if ($this->shouldLog('log_commands')) {
+                Logger::infoContext('Inactivity spike alerts enabled', $this->logContextForChat($chatId, [
+                    'hour' => $hour,
+                    'threshold' => $threshold,
+                ]));
+            }
+            return;
+        }
+
+        if ($action === 'off') {
+            $this->settings->updateInactivitySpike($chatId, false, null, null);
+            $this->tg->sendMessage($responseChatId, 'Inactivity spike alerts disabled.', ['parse_mode' => 'HTML']);
+            if ($this->shouldLog('log_commands')) {
+                Logger::infoContext('Inactivity spike alerts disabled', $this->logContextForChat($chatId));
+            }
+            return;
+        }
+
+        $this->tg->sendMessage($responseChatId, 'Usage: /autospike on [hour] [threshold%] [chat_id] | /autospike off [chat_id] | /autospike status [chat_id]', ['parse_mode' => 'HTML']);
+    }
+
+    private function buildWeeklySummaryLines(int|string $chatId, array $stats, int $days): array
+    {
+        $chatRow = $this->db->fetch('SELECT title FROM chats WHERE id = ? LIMIT 1', [$chatId]);
+        $chatTitle = $chatRow['title'] ?? ('Chat ' . $chatId);
+        $summary = $stats['summary'] ?? [];
+
+        $lines = [];
+        $lines[] = '<b>Weekly Summary</b>';
+        $lines[] = $this->escape($chatTitle) . ' · ' . $this->escape($stats['range']['label'] ?? ('Last ' . $days . ' days'));
+        $lines[] = 'Messages: ' . number_format((int)($summary['messages'] ?? 0));
+        $lines[] = 'Active hours: ' . number_format(((float)($summary['active_minutes'] ?? 0)) / 60, 1) . 'h';
+        $lines[] = 'Actions: ' . number_format((int)($summary['warnings'] ?? 0) + (int)($summary['mutes'] ?? 0) + (int)($summary['bans'] ?? 0));
+        $lines[] = '';
+        $lines[] = '<b>Top 5 Mods</b>';
+
+        $top = array_slice($stats['mods'], 0, 5);
+        $rank = 1;
+        foreach ($top as $mod) {
+            $activeH = ((float)($mod['active_minutes'] ?? 0)) / 60;
+            $presenceH = ((float)($mod['membership_minutes'] ?? 0)) / 60;
+            $actions = (int)($mod['warnings'] ?? 0) + (int)($mod['mutes'] ?? 0) + (int)($mod['bans'] ?? 0);
+            $lines[] = $rank . '. ' . $mod['display_name'] . ' · ' . number_format($activeH, 1) . 'h active · ' . number_format($presenceH, 1) . 'h presence · ' . $actions . ' actions';
+            $rank++;
+        }
+
+        [$chatRank, $actionRank] = $this->buildActivityRanks($stats['mods'], 5);
+        $lines[] = '';
+        $lines[] = '<b>Chat Work Ranking</b>';
+        $rank = 1;
+        foreach ($chatRank as $mod) {
+            $lines[] = $rank . '. ' . $mod['display_name'] . ' · ' . number_format($mod['chat_score'], 2) . ' score · ' . number_format($mod['active_hours'], 1) . 'h active · ' . number_format((int)$mod['messages']) . ' msgs';
+            $rank++;
+        }
+        $lines[] = '';
+        $lines[] = '<b>Moderation Actions Ranking</b>';
+        $rank = 1;
+        foreach ($actionRank as $mod) {
+            $lines[] = $rank . '. ' . $mod['display_name'] . ' · ' . number_format($mod['action_score'], 2) . ' score · ' . $mod['actions'] . ' actions';
+            $rank++;
+        }
+
+        $eligibility = $this->config['eligibility'] ?? [];
+        $minDays = (int)($eligibility['min_days_active'] ?? 0);
+        $minMessages = (int)($eligibility['min_messages'] ?? 0);
+        $alerts = [];
+        foreach ($stats['mods'] as $mod) {
+            if ($minDays > 0 && ($mod['days_active'] ?? 0) < $minDays) {
+                $alerts[] = $mod['display_name'] . ' (low days)';
+                continue;
+            }
+            if ($minMessages > 0 && ($mod['messages'] ?? 0) < $minMessages) {
+                $alerts[] = $mod['display_name'] . ' (low msgs)';
+            }
+        }
+        if (!empty($alerts)) {
+            $lines[] = '';
+            $lines[] = '<b>Alerts</b>';
+            $lines[] = implode(', ', array_slice($alerts, 0, 8));
+        }
+
+        return $lines;
+    }
+
     private function handleActivityRank(int|string $responseChatId, int|string $chatId, string $args, int|string $userId): void
     {
         if (!$this->isManager($userId)) {
@@ -3534,6 +3699,8 @@ class UpdateHandler
                 '/finduser &lt;name|@username|user_id&gt; [chat_id]',
                 '/timesheet &lt;@username|user_id&gt; [YYYY-MM-DD] [YYYY-MM-DD] [chat_id]',
                 '/compare &lt;@user1|id1&gt; &lt;@user2|id2&gt; [YYYY-MM] [chat_id]',
+                '/weeklysummary [chat_id] [days]',
+                '/autospike on [hour] [threshold%] [chat_id]',
                 '/leaderboard [chat_id] [YYYY-MM] [budget]',
                 '/report [chat_id] [YYYY-MM] [budget]',
                 '/reportcsv [chat_id] [YYYY-MM] [budget]',
@@ -3645,6 +3812,7 @@ class UpdateHandler
             '<code>/activityrank 2026-02 5</code>',
             '<code>/aireview 2026-02</code>',
             '<code>/retention 2026-02 30%</code>',
+            '<code>/weeklysummary 7</code>',
             '',
             '<b>Leaderboards</b>',
             '<code>/leaderboard</code>',
@@ -3678,6 +3846,7 @@ class UpdateHandler
             '<code>/autoinactive on 7 10</code> (inactive 7d, 10:00)',
             '<code>/autoaireview on 1 9</code> (monthly AI review)',
             '<code>/autoretention on 2 10 30%</code> (retention drop alerts)',
+            '<code>/autospike on 10 35%</code> (inactivity spike alerts)',
             '',
             '<b>Approvals + audit log</b>',
             '<code>/approval on</code>',

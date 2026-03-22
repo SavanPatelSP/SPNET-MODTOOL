@@ -229,6 +229,19 @@ return [
         'severity_low' => 25,
     ],
 
+    // Inactivity spike alerts (rolling window vs previous window)
+    'inactivity_spike_defaults' => [
+        'enabled' => false,
+        'hour' => 10,
+        'threshold' => 35, // percent drop
+    ],
+    'inactivity_spike' => [
+        'window_days' => 7,
+        'min_prev_messages' => 200,
+        'min_prev_active_hours' => 20,
+        'min_prev_active_mods' => 3,
+    ],
+
     // Report branding
     'report' => [
         'brand_name' => 'SP NET MOD TOOL',

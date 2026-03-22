@@ -55,13 +55,18 @@ class SettingsService
         $retentionDay = (int)($retentionDefaults['day'] ?? 2);
         $retentionHour = (int)($retentionDefaults['hour'] ?? 10);
         $retentionThreshold = (float)($retentionDefaults['threshold'] ?? 30);
+
+        $spikeDefaults = $this->config['inactivity_spike_defaults'] ?? [];
+        $spikeEnabled = !empty($spikeDefaults['enabled']) ? 1 : 0;
+        $spikeHour = (int)($spikeDefaults['hour'] ?? 10);
+        $spikeThreshold = (float)($spikeDefaults['threshold'] ?? 35);
         $approvals = $this->config['approvals'] ?? [];
         $approvalRequired = !empty($approvals['default_required']) ? 1 : 0;
 
         $this->db->exec(
-            'INSERT INTO settings (chat_id, reward_budget, timezone, active_gap_minutes, active_floor_minutes, auto_report_enabled, auto_report_day, auto_report_hour, progress_report_enabled, progress_report_day, progress_report_hour, weekly_summary_enabled, weekly_summary_weekday, weekly_summary_hour, inactivity_alert_enabled, inactivity_alert_days, inactivity_alert_hour, ai_review_enabled, ai_review_day, ai_review_hour, retention_alert_enabled, retention_alert_day, retention_alert_hour, retention_threshold, approval_required, updated_at)
-             VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [$chatId, $timezone, $gap, $floor, $autoEnabled, $autoDay, $autoHour, $progressEnabled, $progressDay, $progressHour, $weeklyEnabled, $weeklyWeekday, $weeklyHour, $inactiveEnabled, $inactiveDays, $inactiveHour, $aiEnabled, $aiDay, $aiHour, $retentionEnabled, $retentionDay, $retentionHour, $retentionThreshold, $approvalRequired, $this->nowUtc()]
+            'INSERT INTO settings (chat_id, reward_budget, timezone, active_gap_minutes, active_floor_minutes, auto_report_enabled, auto_report_day, auto_report_hour, progress_report_enabled, progress_report_day, progress_report_hour, weekly_summary_enabled, weekly_summary_weekday, weekly_summary_hour, inactivity_alert_enabled, inactivity_alert_days, inactivity_alert_hour, ai_review_enabled, ai_review_day, ai_review_hour, retention_alert_enabled, retention_alert_day, retention_alert_hour, retention_threshold, inactivity_spike_enabled, inactivity_spike_hour, inactivity_spike_threshold, approval_required, updated_at)
+             VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [$chatId, $timezone, $gap, $floor, $autoEnabled, $autoDay, $autoHour, $progressEnabled, $progressDay, $progressHour, $weeklyEnabled, $weeklyWeekday, $weeklyHour, $inactiveEnabled, $inactiveDays, $inactiveHour, $aiEnabled, $aiDay, $aiHour, $retentionEnabled, $retentionDay, $retentionHour, $retentionThreshold, $spikeEnabled, $spikeHour, $spikeThreshold, $approvalRequired, $this->nowUtc()]
         );
 
         return [
@@ -89,6 +94,9 @@ class SettingsService
             'retention_alert_day' => $retentionDay,
             'retention_alert_hour' => $retentionHour,
             'retention_threshold' => $retentionThreshold,
+            'inactivity_spike_enabled' => $spikeEnabled,
+            'inactivity_spike_hour' => $spikeHour,
+            'inactivity_spike_threshold' => $spikeThreshold,
             'approval_required' => $approvalRequired,
         ];
     }
@@ -281,6 +289,25 @@ class SettingsService
             'UPDATE settings SET retention_alert_last_month = ?, retention_alert_last_sent_at = ?, updated_at = ? WHERE chat_id = ?',
             [$month, $this->nowUtc(), $this->nowUtc(), $chatId]
         );
+    }
+
+    public function updateInactivitySpike(int|string $chatId, bool $enabled, ?int $hour, ?float $threshold): void
+    {
+        $fields = ['inactivity_spike_enabled = ?', 'updated_at = ?'];
+        $params = [$enabled ? 1 : 0, $this->nowUtc()];
+
+        if ($hour !== null) {
+            $fields[] = 'inactivity_spike_hour = ?';
+            $params[] = $hour;
+        }
+        if ($threshold !== null) {
+            $fields[] = 'inactivity_spike_threshold = ?';
+            $params[] = $threshold;
+        }
+
+        $params[] = $chatId;
+        $sql = 'UPDATE settings SET ' . implode(', ', $fields) . ' WHERE chat_id = ?';
+        $this->db->exec($sql, $params);
     }
 
     private function nowUtc(): string

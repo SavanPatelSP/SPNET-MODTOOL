@@ -72,6 +72,18 @@ function sendChunkedMessage(Telegram $tg, int|string $chatId, string $text, int 
     }
 }
 
+function percentDrop(float $current, float $previous): ?float
+{
+    if ($previous <= 0) {
+        return null;
+    }
+    $drop = (($previous - $current) / $previous) * 100;
+    if ($drop <= 0) {
+        return 0.0;
+    }
+    return round($drop, 1);
+}
+
 $ownerIds = $config['owner_user_ids'] ?? [];
 $ownerIds = array_values(array_filter(array_map('intval', is_array($ownerIds) ? $ownerIds : [])));
 $managerIds = $config['manager_user_ids'] ?? [];
@@ -81,9 +93,9 @@ $midMonthEnabled = (bool)($config['premium']['notifications']['mid_month_alert']
 $congratsEnabled = (bool)($config['premium']['notifications']['congrats'] ?? true);
 
 try {
-    $rows = $db->fetchAll('SELECT * FROM settings WHERE auto_report_enabled = 1 OR progress_report_enabled = 1 OR weekly_summary_enabled = 1 OR inactivity_alert_enabled = 1 OR ai_review_enabled = 1 OR retention_alert_enabled = 1');
+    $rows = $db->fetchAll('SELECT * FROM settings WHERE auto_report_enabled = 1 OR progress_report_enabled = 1 OR weekly_summary_enabled = 1 OR inactivity_alert_enabled = 1 OR ai_review_enabled = 1 OR retention_alert_enabled = 1 OR inactivity_spike_enabled = 1');
 } catch (Throwable $e) {
-    echo "Report columns missing. Run migrations/002_auto_reports.sql, migrations/006_progress_reports.sql, migrations/015_weekly_summary.sql, migrations/016_inactivity_alerts.sql, migrations/017_ai_review.sql, and migrations/018_retention_alerts.sql\n";
+    echo "Report columns missing. Run migrations/002_auto_reports.sql, migrations/006_progress_reports.sql, migrations/015_weekly_summary.sql, migrations/016_inactivity_alerts.sql, migrations/017_ai_review.sql, migrations/018_retention_alerts.sql, and migrations/019_inactivity_spikes.sql\n";
     exit(1);
 }
 
@@ -204,6 +216,91 @@ foreach ($rows as $row) {
                             }
                             $settingsService->updateRetentionAlertLast($chatId, $targetMonth);
                             Logger::info('Retention alerts sent for chat ' . $chatId . ' month ' . $targetMonth);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (!empty($row['inactivity_spike_enabled'])) {
+        $hour = (int)($row['inactivity_spike_hour'] ?? 10);
+        $threshold = (float)($row['inactivity_spike_threshold'] ?? ($config['inactivity_spike_defaults']['threshold'] ?? 35));
+
+        if ($currentHour >= $hour) {
+            $period = $nowLocal->format('Y-m-d');
+            if (!$notifications->wasSent($chatId, 'inactivity_spike', $period)) {
+                if (!$isPremium) {
+                    Logger::info('Inactivity spike alerts skipped for chat ' . $chatId . ' (not premium)');
+                } else {
+                    $spikeConfig = $config['inactivity_spike'] ?? [];
+                    $windowDays = (int)($spikeConfig['window_days'] ?? 7);
+                    $minPrevMessages = (int)($spikeConfig['min_prev_messages'] ?? 200);
+                    $minPrevActiveHours = (float)($spikeConfig['min_prev_active_hours'] ?? 20);
+                    $minPrevActiveMods = (int)($spikeConfig['min_prev_active_mods'] ?? 3);
+
+                    $currentStats = $statsService->getRollingStats($chatId, $windowDays, $nowLocal);
+                    $prevStats = $statsService->getRollingStats($chatId, $windowDays, $nowLocal->modify('-' . $windowDays . ' days'));
+
+                    if (!empty($currentStats['mods']) && !empty($prevStats['mods'])) {
+                        $currSummary = $currentStats['summary'] ?? [];
+                        $prevSummary = $prevStats['summary'] ?? [];
+
+                        $currMessages = (float)($currSummary['messages'] ?? 0);
+                        $prevMessages = (float)($prevSummary['messages'] ?? 0);
+                        $currActiveHours = ((float)($currSummary['active_minutes'] ?? 0)) / 60;
+                        $prevActiveHours = ((float)($prevSummary['active_minutes'] ?? 0)) / 60;
+
+                        $currActiveMods = 0;
+                        foreach ($currentStats['mods'] as $mod) {
+                            if ((int)($mod['messages'] ?? 0) > 0 || (float)($mod['active_minutes'] ?? 0) > 0) {
+                                $currActiveMods++;
+                            }
+                        }
+                        $prevActiveMods = 0;
+                        foreach ($prevStats['mods'] as $mod) {
+                            if ((int)($mod['messages'] ?? 0) > 0 || (float)($mod['active_minutes'] ?? 0) > 0) {
+                                $prevActiveMods++;
+                            }
+                        }
+
+                        $reasons = [];
+                        $dropMessages = percentDrop($currMessages, $prevMessages);
+                        if ($prevMessages >= $minPrevMessages && $dropMessages !== null && $dropMessages >= $threshold) {
+                            $reasons[] = 'Messages down ' . number_format($dropMessages, 1) . '% (' . number_format($prevMessages) . '→' . number_format($currMessages) . ')';
+                        }
+
+                        $dropActive = percentDrop($currActiveHours, $prevActiveHours);
+                        if ($prevActiveHours >= $minPrevActiveHours && $dropActive !== null && $dropActive >= $threshold) {
+                            $reasons[] = 'Active hours down ' . number_format($dropActive, 1) . '% (' . number_format($prevActiveHours, 1) . 'h→' . number_format($currActiveHours, 1) . 'h)';
+                        }
+
+                        $dropActiveMods = percentDrop($currActiveMods, $prevActiveMods);
+                        if ($prevActiveMods >= $minPrevActiveMods && $dropActiveMods !== null && $dropActiveMods >= $threshold) {
+                            $reasons[] = 'Active mods down ' . number_format($dropActiveMods, 1) . '% (' . number_format($prevActiveMods) . '→' . number_format($currActiveMods) . ')';
+                        }
+
+                        if (!empty($reasons)) {
+                            $chatRow = $db->fetch('SELECT title FROM chats WHERE id = ? LIMIT 1', [$chatId]);
+                            $chatTitle = $chatRow['title'] ?? ('Chat ' . $chatId);
+                            $lines = [];
+                            $lines[] = '<b>Inactivity Spike Alert</b>';
+                            $lines[] = $chatTitle . ' · Last ' . $windowDays . ' days vs previous ' . $windowDays . ' days';
+                            $lines[] = 'Threshold: ' . number_format($threshold, 0) . '% drop';
+                            $lines[] = '';
+                            foreach ($reasons as $reason) {
+                                $lines[] = '• ' . $reason;
+                            }
+
+                            $targets = !empty($managerIds) ? $managerIds : $ownerIds;
+                            if (!empty($targets)) {
+                                $message = implode("\n", $lines);
+                                foreach ($targets as $managerId) {
+                                    $tg->sendMessage($managerId, $message, ['parse_mode' => 'HTML']);
+                                }
+                                $notifications->markSent($chatId, 'inactivity_spike', $period);
+                                Logger::info('Inactivity spike alert sent for chat ' . $chatId . ' date ' . $period);
+                            }
                         }
                     }
                 }

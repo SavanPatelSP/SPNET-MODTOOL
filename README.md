@@ -71,11 +71,13 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
    - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/017_ai_review.sql`
 19. Run the retention alerts migration:
    - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/018_retention_alerts.sql`
-20. Copy config overrides:
+20. Run the inactivity spike alerts migration:
+   - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/019_inactivity_spikes.sql`
+21. Copy config overrides:
    - `cp /Users/savanpatel/Documents/SPNET-MODTOOL/config.example.php /Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php`
-21. Edit `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` with your bot token and DB creds.
+22. Edit `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` with your bot token and DB creds.
     - Optional: add `owner_user_ids` and `manager_user_ids` for staff access.
-22. Run in long-poll mode:
+23. Run in long-poll mode:
    - `php /Users/savanpatel/Documents/SPNET-MODTOOL/bin/poll.php`
 
 ## Commands
@@ -90,6 +92,7 @@ Private chat commands:
 - `/stats [chat_id] [YYYY-MM] [@user]`
 - `/timesheet <@username|user_id> [YYYY-MM-DD] [YYYY-MM-DD] [chat_id]`
 - `/compare <@user1|id1> <@user2|id2> [YYYY-MM] [chat_id]`
+- `/weeklysummary [days]` (manual weekly summary)
 - `/leaderboard [chat_id] [YYYY-MM] [budget]`
 - `/report [chat_id] [YYYY-MM] [budget]`
 - `/reportcsv [chat_id] [YYYY-MM] [budget]`
@@ -124,6 +127,8 @@ Private chat commands:
 - `/autoaireview off [chat_id]`
 - `/autoretention on [day] [hour] [threshold%] [chat_id]`
 - `/autoretention off [chat_id]`
+- `/autospike on [hour] [threshold%] [chat_id]`
+- `/autospike off [chat_id]`
 - `/autoreport status [chat_id]`
 - `/autoprogress on [day] [hour] [chat_id]`
 - `/autoprogress off [chat_id]`
@@ -176,6 +181,7 @@ Tip: You can forward a user message to the bot in private chat and reply with `/
 /stats @alex
 /timesheet @alex 2026-02-01 2026-02-28
 /compare @alex @maria 2026-02
+/weeklysummary 7
 /leaderboard
 /leaderboard 2026-02
 ```
@@ -237,6 +243,7 @@ Enable monthly reports and mid-month progress:
 /autoprogress on 15 12
 /autoaireview on 1 9
 /autoretention on 2 10 30%
+/autospike on 10 35%
 ```
 The scheduler must run hourly:
 ```text
