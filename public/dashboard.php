@@ -257,6 +257,23 @@ $mostActions = null;
 $mostActive = null;
 $mostImpact = null;
 $mostConsistent = null;
+$topHelper = null;
+$topHelperMessages = -1;
+$fastResponder = null;
+$fastResponderRate = null;
+$fastFallback = null;
+$fastFallbackRate = null;
+$mostBalanced = null;
+$mostBalancedScore = null;
+$balancedFallback = null;
+$balancedFallbackScore = null;
+$mostBalancedMeta = '';
+$balancedFallbackMeta = '';
+$fastMinMessages = 15;
+$fastMinHours = 1.0;
+$balancedMinMessages = 15;
+$balancedMinActions = 1;
+$scoreWeights = $config['score_weights'] ?? [];
 foreach ($modsFiltered as $mod) {
     if ($mod['improvement'] !== null) {
         if ($mostImproved === null || $mod['improvement'] > $mostImproved['improvement']) {
@@ -275,6 +292,76 @@ foreach ($modsFiltered as $mod) {
     if ($mostConsistent === null || ($mod['consistency_index'] ?? 0) > ($mostConsistent['consistency_index'] ?? 0)) {
         $mostConsistent = $mod;
     }
+
+    $messages = (int)($mod['messages'] ?? 0);
+    if ($messages > $topHelperMessages) {
+        $topHelperMessages = $messages;
+        $topHelper = $mod;
+    }
+
+    $activeMinutes = (float)($mod['active_minutes'] ?? 0);
+    $activeHours = $activeMinutes / 60;
+    if ($messages > 0 && $activeHours > 0) {
+        $rate = $messages / $activeHours;
+        if ($messages >= $fastMinMessages && $activeHours >= $fastMinHours) {
+            if ($fastResponderRate === null || $rate > $fastResponderRate) {
+                $fastResponderRate = $rate;
+                $fastResponder = $mod;
+            }
+        } else {
+            if ($fastFallbackRate === null || $rate > $fastFallbackRate) {
+                $fastFallbackRate = $rate;
+                $fastFallback = $mod;
+            }
+        }
+    }
+
+    $warnings = (int)($mod['warnings'] ?? 0);
+    $mutes = (int)($mod['mutes'] ?? 0);
+    $bans = (int)($mod['bans'] ?? 0);
+    $actions = $warnings + $mutes + $bans;
+    $daysActive = (int)($mod['days_active'] ?? 0);
+    $roleMultiplier = (float)($mod['role_multiplier'] ?? 1.0);
+
+    $chatScore = 0.0;
+    $chatScore += log(1 + $messages) * ($scoreWeights['message'] ?? 1.0);
+    $chatScore += sqrt($activeMinutes) * ($scoreWeights['active_minute'] ?? 0.0);
+    $chatScore += $daysActive * ($scoreWeights['day_active'] ?? 0.0);
+    $chatScore *= $roleMultiplier;
+
+    $actionScore = 0.0;
+    $actionScore += $warnings * ($scoreWeights['warn'] ?? 1.0);
+    $actionScore += $mutes * ($scoreWeights['mute'] ?? 1.0);
+    $actionScore += $bans * ($scoreWeights['ban'] ?? 1.0);
+    $actionScore *= $roleMultiplier;
+
+    if ($chatScore > 0 && $actionScore > 0) {
+        $balanceRatio = 1 - (abs($chatScore - $actionScore) / max($chatScore, $actionScore, 1.0));
+        $score = ($chatScore + $actionScore) * $balanceRatio;
+        $meta = 'Balance ' . number_format($balanceRatio * 100, 0) . '% · ' . $messages . ' msgs · ' . $actions . ' actions';
+        if ($messages >= $balancedMinMessages && $actions >= $balancedMinActions) {
+            if ($mostBalancedScore === null || $score > $mostBalancedScore) {
+                $mostBalancedScore = $score;
+                $mostBalanced = $mod;
+                $mostBalancedMeta = $meta;
+            }
+        } else {
+            if ($balancedFallbackScore === null || $score > $balancedFallbackScore) {
+                $balancedFallbackScore = $score;
+                $balancedFallback = $mod;
+                $balancedFallbackMeta = $meta;
+            }
+        }
+    }
+}
+
+if ($fastResponder === null && $fastFallback !== null) {
+    $fastResponder = $fastFallback;
+    $fastResponderRate = $fastFallbackRate;
+}
+if ($mostBalanced === null && $balancedFallback !== null) {
+    $mostBalanced = $balancedFallback;
+    $mostBalancedMeta = $balancedFallbackMeta;
 }
 
 $totalMessages = (int)($summary['messages'] ?? 0);
@@ -1239,12 +1326,51 @@ label.check {
             </div>
         </div>
         <div class="highlight-card">
-            <h4>Most Consistent</h4>
+            <h4>Consistency King</h4>
             <div class="mod-name"><?php echo htmlspecialchars($mostConsistent['display_name'] ?? 'N/A', ENT_QUOTES, 'UTF-8'); ?></div>
             <div class="score">
                 <?php
                     if (!empty($mostConsistent)) {
                         echo number_format((float)($mostConsistent['consistency_index'] ?? 0), 1) . '%';
+                    } else {
+                        echo 'N/A';
+                    }
+                ?>
+            </div>
+        </div>
+        <div class="highlight-card">
+            <h4>Top Helper</h4>
+            <div class="mod-name"><?php echo htmlspecialchars($topHelper['display_name'] ?? 'N/A', ENT_QUOTES, 'UTF-8'); ?></div>
+            <div class="score">
+                <?php
+                    if (!empty($topHelper)) {
+                        echo number_format((int)($topHelper['messages'] ?? 0)) . ' msgs';
+                    } else {
+                        echo 'N/A';
+                    }
+                ?>
+            </div>
+        </div>
+        <div class="highlight-card">
+            <h4>Most Balanced</h4>
+            <div class="mod-name"><?php echo htmlspecialchars($mostBalanced['display_name'] ?? 'N/A', ENT_QUOTES, 'UTF-8'); ?></div>
+            <div class="score">
+                <?php
+                    if (!empty($mostBalanced) && $mostBalancedMeta !== '') {
+                        echo htmlspecialchars($mostBalancedMeta, ENT_QUOTES, 'UTF-8');
+                    } else {
+                        echo 'N/A';
+                    }
+                ?>
+            </div>
+        </div>
+        <div class="highlight-card">
+            <h4>Fast Responder</h4>
+            <div class="mod-name"><?php echo htmlspecialchars($fastResponder['display_name'] ?? 'N/A', ENT_QUOTES, 'UTF-8'); ?></div>
+            <div class="score">
+                <?php
+                    if (!empty($fastResponder) && $fastResponderRate !== null) {
+                        echo number_format((float)$fastResponderRate, 1) . ' msgs/hr';
                     } else {
                         echo 'N/A';
                     }

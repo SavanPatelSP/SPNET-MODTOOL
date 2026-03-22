@@ -3950,6 +3950,7 @@ class UpdateHandler
             '<code>http://127.0.0.1:8000/dashboard.php?token=YOUR_TOKEN</code>',
             '<code>http://127.0.0.1:8000/manager-digest.php?token=YOUR_TOKEN</code> (manager digest)',
             'Tip: add <code>&amp;chat_id=...&amp;month=YYYY-MM&amp;budget=5000</code>',
+            'Dashboard highlights show badges (Top Helper, Most Balanced, Consistency King, Fast Responder).',
             '',
             '<b>Imports</b>',
             '<code>php bin/import-chatkeeper.php --file=/path/analysis_users.csv --chat=&lt;chat_id&gt; --month=2026-02</code>',

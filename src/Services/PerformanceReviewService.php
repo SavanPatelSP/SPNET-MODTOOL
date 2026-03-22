@@ -64,12 +64,39 @@ class PerformanceReviewService
         $mostActiveValue = -1.0;
         $mostImprovedId = null;
         $mostImprovedValue = null;
+        $topHelperId = null;
+        $topHelperMessages = -1;
+        $consistencyKingId = null;
+        $consistencyMax = -1.0;
+        $fastResponderId = null;
+        $fastResponderRate = null;
+        $fastFallbackId = null;
+        $fastFallbackRate = null;
+        $balancedId = null;
+        $balancedScore = null;
+        $balancedFallbackId = null;
+        $balancedFallbackScore = null;
+        $fastMinMessages = 15;
+        $fastMinHours = 1.0;
+        $balancedMinMessages = 15;
+        $balancedMinActions = 1;
+        $weights = $this->config['score_weights'] ?? [];
 
         foreach ($mods as $mod) {
             $hours = (float)($mod['active_minutes'] ?? 0) / 60;
             if ($hours > $mostActiveValue) {
                 $mostActiveValue = $hours;
                 $mostActiveId = $mod['user_id'];
+            }
+            $messagesValue = (int)($mod['messages'] ?? 0);
+            if ($messagesValue > $topHelperMessages) {
+                $topHelperMessages = $messagesValue;
+                $topHelperId = $mod['user_id'];
+            }
+            $consistencyValue = (float)($mod['consistency_index'] ?? 0);
+            if ($consistencyValue > $consistencyMax) {
+                $consistencyMax = $consistencyValue;
+                $consistencyKingId = $mod['user_id'];
             }
             $improvement = $mod['improvement'] ?? null;
             if ($improvement !== null) {
@@ -78,6 +105,65 @@ class PerformanceReviewService
                     $mostImprovedId = $mod['user_id'];
                 }
             }
+
+            $activeMinutes = (float)($mod['active_minutes'] ?? 0);
+            $hoursValue = $activeMinutes / 60;
+            if ($messagesValue > 0 && $hoursValue > 0) {
+                $rate = $messagesValue / $hoursValue;
+                if ($messagesValue >= $fastMinMessages && $hoursValue >= $fastMinHours) {
+                    if ($fastResponderRate === null || $rate > $fastResponderRate) {
+                        $fastResponderRate = $rate;
+                        $fastResponderId = $mod['user_id'];
+                    }
+                } else {
+                    if ($fastFallbackRate === null || $rate > $fastFallbackRate) {
+                        $fastFallbackRate = $rate;
+                        $fastFallbackId = $mod['user_id'];
+                    }
+                }
+            }
+
+            $warnings = (int)($mod['warnings'] ?? 0);
+            $mutes = (int)($mod['mutes'] ?? 0);
+            $bans = (int)($mod['bans'] ?? 0);
+            $actions = $warnings + $mutes + $bans;
+            $daysActiveValue = (int)($mod['days_active'] ?? 0);
+            $roleMultiplier = (float)($mod['role_multiplier'] ?? 1.0);
+
+            $chatScore = 0.0;
+            $chatScore += log(1 + $messagesValue) * ($weights['message'] ?? 1.0);
+            $chatScore += sqrt($activeMinutes) * ($weights['active_minute'] ?? 0.0);
+            $chatScore += $daysActiveValue * ($weights['day_active'] ?? 0.0);
+            $chatScore *= $roleMultiplier;
+
+            $actionScore = 0.0;
+            $actionScore += $warnings * ($weights['warn'] ?? 1.0);
+            $actionScore += $mutes * ($weights['mute'] ?? 1.0);
+            $actionScore += $bans * ($weights['ban'] ?? 1.0);
+            $actionScore *= $roleMultiplier;
+
+            if ($chatScore > 0 && $actionScore > 0) {
+                $balanceRatio = 1 - (abs($chatScore - $actionScore) / max($chatScore, $actionScore, 1.0));
+                $score = ($chatScore + $actionScore) * $balanceRatio;
+                if ($messagesValue >= $balancedMinMessages && $actions >= $balancedMinActions) {
+                    if ($balancedScore === null || $score > $balancedScore) {
+                        $balancedScore = $score;
+                        $balancedId = $mod['user_id'];
+                    }
+                } else {
+                    if ($balancedFallbackScore === null || $score > $balancedFallbackScore) {
+                        $balancedFallbackScore = $score;
+                        $balancedFallbackId = $mod['user_id'];
+                    }
+                }
+            }
+        }
+
+        if ($fastResponderId === null && $fastFallbackId !== null) {
+            $fastResponderId = $fastFallbackId;
+        }
+        if ($balancedId === null && $balancedFallbackId !== null) {
+            $balancedId = $balancedFallbackId;
         }
 
         $reviewConfig = $this->config['ai_review'] ?? [];
@@ -108,6 +194,18 @@ class PerformanceReviewService
             }
             if ($mostImprovedId !== null && (int)$mod['user_id'] === (int)$mostImprovedId) {
                 $labels[] = 'Most Improved';
+            }
+            if ($topHelperId !== null && (int)$mod['user_id'] === (int)$topHelperId) {
+                $labels[] = 'Top Helper';
+            }
+            if ($balancedId !== null && (int)$mod['user_id'] === (int)$balancedId) {
+                $labels[] = 'Most Balanced';
+            }
+            if ($consistencyKingId !== null && (int)$mod['user_id'] === (int)$consistencyKingId) {
+                $labels[] = 'Consistency King';
+            }
+            if ($fastResponderId !== null && (int)$mod['user_id'] === (int)$fastResponderId) {
+                $labels[] = 'Fast Responder';
             }
 
             $strengths = [];

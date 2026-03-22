@@ -30,6 +30,7 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
 - Import wizard (dashboard upload)
 - Mod roster manager + report archive
 - Owner notifications (report DM, mid-month alerts, congrats templates)
+- Performance badges shown on dashboard + AI reviews
 
 ## Quick Start
 1. Ensure MySQL or MariaDB is running.
