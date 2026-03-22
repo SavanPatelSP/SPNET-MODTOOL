@@ -229,7 +229,7 @@ class UpdateHandler
             'plan', 'setplan', 'coach', 'health', 'trend', 'execsummary', 'archive',
             'rosteradd', 'rosterremove', 'rosterlist', 'rosterrole',
             'premium', 'benefits', 'pricing', 'guide', 'giftplan', 'grantplan', 'approval', 'approvereport', 'approvalstatus', 'auditlogcsv',
-            'buy_stars_test', 'buy_crypto_test', 'paystatus',
+            'buy_stars_test', 'buy_crypto_test', 'paystatus', 'debughours',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
 
@@ -343,6 +343,9 @@ class UpdateHandler
                         return;
                     case 'progress':
                         $this->handleProgressReport($chatId, $targetChatId, $cleanArgs);
+                        return;
+                    case 'debughours':
+                        $this->handleDebugHours($chatId, $targetChatId, $message, $cleanArgs);
                         return;
                     case 'modadd':
                         $this->handleModAddPrivate($chatId, $targetChatId, $cleanArgs, $message);
@@ -467,6 +470,72 @@ class UpdateHandler
 
         $text = $this->formatStatsMessage($target, $stats['range']);
         $this->tg->sendMessage($responseChatId, $text, ['parse_mode' => 'HTML']);
+    }
+
+    private function handleDebugHours(int|string $responseChatId, int|string $chatId, array $message, string $args): void
+    {
+        $targetUserId = $message['from']['id'];
+        $targetUsername = null;
+        $month = null;
+
+        if (isset($message['reply_to_message']['from'])) {
+            $targetUserId = $message['reply_to_message']['from']['id'];
+            $targetUsername = $message['reply_to_message']['from']['username'] ?? null;
+        }
+
+        $tokens = preg_split('/\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^\d{4}-\d{2}$/', $token)) {
+                $month = $token;
+                continue;
+            }
+            if (strpos($token, '@') === 0) {
+                $targetUsername = substr($token, 1);
+                $targetUserId = null;
+            }
+        }
+
+        $stats = $this->stats->getMonthlyStats($chatId, $month);
+        if (empty($stats['mods'])) {
+            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $target = null;
+        foreach ($stats['mods'] as $mod) {
+            if ($targetUserId !== null && (int)$mod['user_id'] === (int)$targetUserId) {
+                $target = $mod;
+                break;
+            }
+            if ($targetUsername !== null && $mod['username'] && strtolower($mod['username']) === strtolower($targetUsername)) {
+                $target = $mod;
+                break;
+            }
+        }
+
+        if (!$target) {
+            $this->tg->sendMessage($responseChatId, 'Mod not found in this chat.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $range = $stats['range'];
+        $lines = [];
+        $lines[] = '<b>Debug Hours</b> — ' . $this->escape($target['display_name']);
+        $lines[] = 'Month: ' . $this->escape($range['label']);
+        $lines[] = 'Active minutes: ' . number_format((float)($target['active_minutes'] ?? 0), 2);
+        $lines[] = 'Presence minutes: ' . number_format((float)($target['membership_minutes'] ?? 0), 2);
+        $lines[] = 'Internal active minutes: ' . number_format((float)($target['internal_active_minutes'] ?? 0), 2);
+        $lines[] = 'External active minutes: ' . number_format((float)($target['external_active_minutes'] ?? 0), 2);
+        $lines[] = 'Messages: ' . number_format((int)($target['messages'] ?? 0));
+        $lines[] = 'Internal messages: ' . number_format((int)($target['internal_messages'] ?? 0));
+        $lines[] = 'External messages: ' . number_format((int)($target['external_messages'] ?? 0));
+        $lines[] = 'Days active: ' . number_format((int)($target['days_active'] ?? 0));
+        $lines[] = 'Membership minutes (raw) are derived from join/leave events.';
+        $lines[] = 'Active minutes (raw) are computed from message timestamps and gap settings.';
+        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
     }
 
     private function handleLeaderboard(int|string $responseChatId, int|string $chatId, string $args): void
