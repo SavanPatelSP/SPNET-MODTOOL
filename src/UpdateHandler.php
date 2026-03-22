@@ -3895,6 +3895,7 @@ class UpdateHandler
             '<b>Reward sheets</b>',
             '<code>/report 2026-02 5000</code>',
             '<code>/reportcsv 2026-02 5000</code>',
+            'Includes performance badges (Top Helper, Most Balanced, Consistency King, Fast Responder).',
             '',
             '<b>Mid-month progress</b>',
             '<code>/progress</code>',

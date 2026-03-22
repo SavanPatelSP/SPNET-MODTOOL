@@ -122,10 +122,98 @@ class RewardSheet
             return [];
         }
 
+        $weights = $this->config['score_weights'] ?? [];
+        $fastMinMessages = 15;
+        $fastMinHours = 1.0;
+        $balancedMinMessages = 15;
+        $balancedMinActions = 1;
+
         $mostActive = $this->maxBy($mods, 'active_minutes');
-        $mostConsistent = $this->maxBy($mods, 'days_active');
+        $mostConsistent = $this->maxBy($mods, 'consistency_index');
         $mostImproved = $this->maxBy($mods, 'improvement');
         $mostModeration = $this->maxBy($mods, 'actions_total');
+        $topHelper = $this->maxBy($mods, 'messages');
+
+        $fastResponder = null;
+        $fastRate = null;
+        $fastFallback = null;
+        $fastFallbackRate = null;
+
+        $balanced = null;
+        $balancedScore = null;
+        $balancedMeta = '';
+        $balancedFallback = null;
+        $balancedFallbackScore = null;
+        $balancedFallbackMeta = '';
+
+        foreach ($mods as $mod) {
+            $messages = (int)($mod['messages'] ?? 0);
+            $activeMinutes = (float)($mod['active_minutes'] ?? 0);
+            $hours = $activeMinutes / 60;
+            $warnings = (int)($mod['warnings'] ?? 0);
+            $mutes = (int)($mod['mutes'] ?? 0);
+            $bans = (int)($mod['bans'] ?? 0);
+            $actions = $warnings + $mutes + $bans;
+            $daysActive = (int)($mod['days_active'] ?? 0);
+            $roleMultiplier = (float)($mod['role_multiplier'] ?? 1.0);
+
+            if ($messages > 0 && $hours > 0) {
+                $rate = $messages / $hours;
+                if ($messages >= $fastMinMessages && $hours >= $fastMinHours) {
+                    if ($fastRate === null || $rate > $fastRate) {
+                        $fastRate = $rate;
+                        $fastResponder = $mod;
+                    }
+                } else {
+                    if ($fastFallbackRate === null || $rate > $fastFallbackRate) {
+                        $fastFallbackRate = $rate;
+                        $fastFallback = $mod;
+                    }
+                }
+            }
+
+            $chatScore = 0.0;
+            $chatScore += log(1 + $messages) * ($weights['message'] ?? 1.0);
+            $chatScore += sqrt($activeMinutes) * ($weights['active_minute'] ?? 0.0);
+            $chatScore += $daysActive * ($weights['day_active'] ?? 0.0);
+            $chatScore *= $roleMultiplier;
+
+            $actionScore = 0.0;
+            $actionScore += $warnings * ($weights['warn'] ?? 1.0);
+            $actionScore += $mutes * ($weights['mute'] ?? 1.0);
+            $actionScore += $bans * ($weights['ban'] ?? 1.0);
+            $actionScore *= $roleMultiplier;
+
+            if ($chatScore > 0 && $actionScore > 0) {
+                $balanceRatio = 1 - (abs($chatScore - $actionScore) / max($chatScore, $actionScore, 1.0));
+                $score = ($chatScore + $actionScore) * $balanceRatio;
+                $meta = 'Balance ' . number_format($balanceRatio * 100, 0) . '% · ' . $messages . ' msgs · ' . $actions . ' actions';
+
+                if ($messages >= $balancedMinMessages && $actions >= $balancedMinActions) {
+                    if ($balancedScore === null || $score > $balancedScore) {
+                        $balancedScore = $score;
+                        $balanced = $mod;
+                        $balancedMeta = $meta;
+                    }
+                } else {
+                    if ($balancedFallbackScore === null || $score > $balancedFallbackScore) {
+                        $balancedFallbackScore = $score;
+                        $balancedFallback = $mod;
+                        $balancedFallbackMeta = $meta;
+                    }
+                }
+            }
+        }
+
+        if ($fastResponder === null && $fastFallback !== null) {
+            $fastResponder = $fastFallback;
+            $fastRate = $fastFallbackRate;
+        }
+
+        if ($balanced === null && $balancedFallback !== null) {
+            $balanced = $balancedFallback;
+            $balancedMeta = $balancedFallbackMeta;
+        }
 
         $insights = [];
 
@@ -135,6 +223,22 @@ class RewardSheet
             'value' => $top['display_name'],
             'meta' => 'Score ' . number_format($top['score'], 2),
         ];
+
+        if ($topHelper) {
+            $insights[] = [
+                'title' => 'Top Helper',
+                'value' => $topHelper['display_name'],
+                'meta' => number_format((int)($topHelper['messages'] ?? 0)) . ' msgs',
+            ];
+        }
+
+        if ($balanced) {
+            $insights[] = [
+                'title' => 'Most Balanced',
+                'value' => $balanced['display_name'],
+                'meta' => $balancedMeta,
+            ];
+        }
 
         if ($mostActive) {
             $insights[] = [
@@ -146,9 +250,9 @@ class RewardSheet
 
         if ($mostConsistent) {
             $insights[] = [
-                'title' => 'Most Consistent',
+                'title' => 'Consistency King',
                 'value' => $mostConsistent['display_name'],
-                'meta' => $mostConsistent['days_active'] . ' active days',
+                'meta' => number_format((float)($mostConsistent['consistency_index'] ?? 0), 1) . '% consistency',
             ];
         }
 
@@ -157,6 +261,14 @@ class RewardSheet
                 'title' => 'Most Improved',
                 'value' => $mostImproved['display_name'],
                 'meta' => 'Up ' . number_format($mostImproved['improvement'], 1) . '%',
+            ];
+        }
+
+        if ($fastResponder && $fastRate !== null) {
+            $insights[] = [
+                'title' => 'Fast Responder',
+                'value' => $fastResponder['display_name'],
+                'meta' => number_format($fastRate, 1) . ' msgs/hr',
             ];
         }
 
