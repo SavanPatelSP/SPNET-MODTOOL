@@ -84,6 +84,68 @@ function percentDrop(float $current, float $previous): ?float
     return round($drop, 1);
 }
 
+function escapeHtml(string $value): string
+{
+    return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
+}
+
+function buildWeeklyTldr(array $stats, string $chatTitle, int $days): string
+{
+    $summary = $stats['summary'] ?? [];
+    $mods = $stats['mods'] ?? [];
+
+    $messages = number_format((int)($summary['messages'] ?? 0));
+    $activeHours = number_format(((float)($summary['active_minutes'] ?? 0)) / 60, 1);
+    $actions = number_format((int)($summary['warnings'] ?? 0) + (int)($summary['mutes'] ?? 0) + (int)($summary['bans'] ?? 0));
+
+    $topRewardLabel = 'n/a';
+    if (!empty($mods)) {
+        $top = $mods[0];
+        $topName = escapeHtml((string)($top['display_name'] ?? 'Unknown'));
+        $topScore = number_format((float)($top['score'] ?? 0), 2);
+        $topRewardLabel = $topName . ' (score ' . $topScore . ')';
+    }
+
+    $riskLabel = 'none';
+    $riskReason = '';
+    if (!empty($mods)) {
+        $inactive = array_filter($mods, static function (array $mod): bool {
+            $messages = (int)($mod['messages'] ?? 0);
+            $activeMinutes = (float)($mod['active_minutes'] ?? 0);
+            $actions = (int)($mod['warnings'] ?? 0) + (int)($mod['mutes'] ?? 0) + (int)($mod['bans'] ?? 0);
+            return $messages === 0 && $activeMinutes <= 0 && $actions === 0;
+        });
+
+        if (!empty($inactive)) {
+            usort($inactive, fn($a, $b) => ($b['membership_minutes'] ?? 0) <=> ($a['membership_minutes'] ?? 0));
+            $riskMod = $inactive[0];
+            $riskLabel = escapeHtml((string)($riskMod['display_name'] ?? 'Unknown'));
+            $riskReason = '0 msgs, 0h';
+        } else {
+            $byScore = $mods;
+            usort($byScore, fn($a, $b) => ($a['score'] ?? 0) <=> ($b['score'] ?? 0));
+            $riskMod = $byScore[0] ?? null;
+            if ($riskMod) {
+                $riskLabel = escapeHtml((string)($riskMod['display_name'] ?? 'Unknown'));
+                $riskMsgs = (int)($riskMod['messages'] ?? 0);
+                $riskHoursValue = ((float)($riskMod['active_minutes'] ?? 0)) / 60;
+                $riskHours = number_format($riskHoursValue, 1);
+                $riskReason = $riskMsgs > 0 || $riskHoursValue > 0
+                    ? $riskMsgs . ' msgs, ' . $riskHours . 'h'
+                    : 'low activity';
+            }
+        }
+    }
+
+    $label = escapeHtml((string)($stats['range']['label'] ?? ('Last ' . $days . ' days')));
+    $line = '<b>TL;DR</b> · ' . escapeHtml($chatTitle) . ' · ' . $label . ' · Quick summary: ' . $messages . ' msgs, ' . $activeHours . 'h active, ' . $actions . ' actions | Top reward: ' . $topRewardLabel . ' | Top risk: ' . $riskLabel;
+    if ($riskReason !== '') {
+        $line .= ' (' . $riskReason . ')';
+    }
+
+    return $line;
+}
+
 $ownerIds = $config['owner_user_ids'] ?? [];
 $ownerIds = array_values(array_filter(array_map('intval', is_array($ownerIds) ? $ownerIds : [])));
 $managerIds = $config['manager_user_ids'] ?? [];
@@ -473,6 +535,10 @@ foreach ($rows as $row) {
                     if (empty($targets)) {
                         Logger::info('Weekly summary skipped for chat ' . $chatId . ' (no managers)');
                     } else {
+                        $tldr = buildWeeklyTldr($stats, $chatTitle, 7);
+                        foreach ($targets as $managerId) {
+                            $tg->sendMessage($managerId, $tldr, ['parse_mode' => 'HTML']);
+                        }
                         $message = implode("\n", $lines);
                         foreach ($targets as $managerId) {
                             $tg->sendMessage($managerId, $message, ['parse_mode' => 'HTML']);

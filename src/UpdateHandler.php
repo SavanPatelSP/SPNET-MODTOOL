@@ -3074,12 +3074,18 @@ class UpdateHandler
         }
 
         $lines = $this->buildWeeklySummaryLines($chatId, $stats, $days);
+        $tldr = $this->buildWeeklySummaryTldr($chatId, $stats, $days);
         $targets = $this->getManagerTargets();
         if (empty($targets)) {
             $this->tg->sendMessage($responseChatId, 'No managers configured in config.local.php (manager_user_ids).', ['parse_mode' => 'HTML']);
             return;
         }
 
+        if ($tldr !== '') {
+            foreach ($targets as $managerId) {
+                $this->tg->sendMessage($managerId, $tldr, ['parse_mode' => 'HTML']);
+            }
+        }
         $this->sendChunkedMessageToTargets($targets, implode("\n", $lines));
         if (!in_array((int)$responseChatId, $targets, true)) {
             $this->tg->sendMessage($responseChatId, 'Weekly summary sent to managers.', ['parse_mode' => 'HTML']);
@@ -3203,6 +3209,66 @@ class UpdateHandler
         }
 
         return $lines;
+    }
+
+    private function buildWeeklySummaryTldr(int|string $chatId, array $stats, int $days): string
+    {
+        $summary = $stats['summary'] ?? [];
+        $mods = $stats['mods'] ?? [];
+
+        $chatRow = $this->db->fetch('SELECT title FROM chats WHERE id = ? LIMIT 1', [$chatId]);
+        $chatTitle = $chatRow['title'] ?? ('Chat ' . $chatId);
+
+        $messages = number_format((int)($summary['messages'] ?? 0));
+        $activeHours = number_format(((float)($summary['active_minutes'] ?? 0)) / 60, 1);
+        $actions = number_format((int)($summary['warnings'] ?? 0) + (int)($summary['mutes'] ?? 0) + (int)($summary['bans'] ?? 0));
+
+        $topRewardLabel = 'n/a';
+        if (!empty($mods)) {
+            $top = $mods[0];
+            $topName = $this->escape((string)($top['display_name'] ?? 'Unknown'));
+            $topScore = number_format((float)($top['score'] ?? 0), 2);
+            $topRewardLabel = $topName . ' (score ' . $topScore . ')';
+        }
+
+        $riskLabel = 'none';
+        $riskReason = '';
+        if (!empty($mods)) {
+            $inactive = array_filter($mods, static function (array $mod): bool {
+                $messages = (int)($mod['messages'] ?? 0);
+                $activeMinutes = (float)($mod['active_minutes'] ?? 0);
+                $actions = (int)($mod['warnings'] ?? 0) + (int)($mod['mutes'] ?? 0) + (int)($mod['bans'] ?? 0);
+                return $messages === 0 && $activeMinutes <= 0 && $actions === 0;
+            });
+
+            if (!empty($inactive)) {
+                usort($inactive, fn($a, $b) => ($b['membership_minutes'] ?? 0) <=> ($a['membership_minutes'] ?? 0));
+                $riskMod = $inactive[0];
+                $riskLabel = $this->escape((string)($riskMod['display_name'] ?? 'Unknown'));
+                $riskReason = '0 msgs, 0h';
+            } else {
+                $byScore = $mods;
+                usort($byScore, fn($a, $b) => ($a['score'] ?? 0) <=> ($b['score'] ?? 0));
+                $riskMod = $byScore[0] ?? null;
+                if ($riskMod) {
+                    $riskLabel = $this->escape((string)($riskMod['display_name'] ?? 'Unknown'));
+                    $riskMsgs = (int)($riskMod['messages'] ?? 0);
+                    $riskHoursValue = ((float)($riskMod['active_minutes'] ?? 0)) / 60;
+                    $riskHours = number_format($riskHoursValue, 1);
+                    $riskReason = $riskMsgs > 0 || $riskHoursValue > 0
+                        ? $riskMsgs . ' msgs, ' . $riskHours . 'h'
+                        : 'low activity';
+                }
+            }
+        }
+
+        $label = $this->escape($stats['range']['label'] ?? ('Last ' . $days . ' days'));
+        $line = '<b>TL;DR</b> · ' . $this->escape($chatTitle) . ' · ' . $label . ' · Quick summary: ' . $messages . ' msgs, ' . $activeHours . 'h active, ' . $actions . ' actions | Top reward: ' . $topRewardLabel . ' | Top risk: ' . $riskLabel;
+        if ($riskReason !== '') {
+            $line .= ' (' . $riskReason . ')';
+        }
+
+        return $line;
     }
 
     private function handleActivityRank(int|string $responseChatId, int|string $chatId, string $args, int|string $userId): void
@@ -3813,6 +3879,7 @@ class UpdateHandler
             '<code>/aireview 2026-02</code>',
             '<code>/retention 2026-02 30%</code>',
             '<code>/weeklysummary 7</code>',
+            'Weekly summary DMs include a one-line TL;DR with quick summary + top risk + top reward.',
             '',
             '<b>Leaderboards</b>',
             '<code>/leaderboard</code>',

@@ -19,6 +19,7 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
 - CSV export + Google Sheets webhook export
 - Auto-scheduled monthly reports
 - Mid-month progress reports (MTD)
+- Weekly summary DM with TL;DR
 - Multi-chat summary report
 - External stats import (ChatKeeper/Combot)
 - Premium subscriptions (plan gating + upgrades)
