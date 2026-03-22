@@ -182,6 +182,14 @@ return [
         'hour' => 12,
     ],
 
+    // Weekly summary defaults (managers DM)
+    // Weekday: 1=Mon ... 7=Sun
+    'weekly_summary_defaults' => [
+        'enabled' => false,
+        'weekday' => 1,
+        'hour' => 10,
+    ],
+
     // Report branding
     'report' => [
         'brand_name' => 'SP NET MOD TOOL',

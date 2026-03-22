@@ -39,14 +39,16 @@ $rewardSheet = new RewardSheet($statsService, $rewardService, $config, $rewardCo
 
 $ownerIds = $config['owner_user_ids'] ?? [];
 $ownerIds = array_values(array_filter(array_map('intval', is_array($ownerIds) ? $ownerIds : [])));
+$managerIds = $config['manager_user_ids'] ?? [];
+$managerIds = array_values(array_filter(array_map('intval', is_array($managerIds) ? $managerIds : [])));
 $ownerDmEnabled = (bool)($config['premium']['notifications']['owner_dm'] ?? true);
 $midMonthEnabled = (bool)($config['premium']['notifications']['mid_month_alert'] ?? true);
 $congratsEnabled = (bool)($config['premium']['notifications']['congrats'] ?? true);
 
 try {
-    $rows = $db->fetchAll('SELECT * FROM settings WHERE auto_report_enabled = 1 OR progress_report_enabled = 1');
+    $rows = $db->fetchAll('SELECT * FROM settings WHERE auto_report_enabled = 1 OR progress_report_enabled = 1 OR weekly_summary_enabled = 1');
 } catch (Throwable $e) {
-    echo "Report columns missing. Run migrations/002_auto_reports.sql and migrations/006_progress_reports.sql\n";
+    echo "Report columns missing. Run migrations/002_auto_reports.sql, migrations/006_progress_reports.sql, and migrations/015_weekly_summary.sql\n";
     exit(1);
 }
 
@@ -151,6 +153,75 @@ foreach ($rows as $row) {
                         }
                     } else {
                         Logger::error('Progress report failed for chat ' . $chatId);
+                    }
+                }
+            }
+        }
+    }
+
+    if (!empty($row['weekly_summary_enabled'])) {
+        $weekday = (int)($row['weekly_summary_weekday'] ?? 1);
+        $hour = (int)($row['weekly_summary_hour'] ?? 10);
+
+        $currentWeekday = (int)$nowLocal->format('N'); // 1=Mon ... 7=Sun
+        if ($currentWeekday === $weekday && $currentHour >= $hour) {
+            $weekKey = $nowLocal->format('o-\WW');
+            if (empty($row['weekly_summary_last_week']) || $row['weekly_summary_last_week'] !== $weekKey) {
+                $stats = $statsService->getRollingStats($chatId, 7, $nowLocal);
+                if (empty($stats['mods'])) {
+                    Logger::info('Weekly summary skipped for chat ' . $chatId . ' (no mods)');
+                } else {
+                    $chatRow = $db->fetch('SELECT title FROM chats WHERE id = ? LIMIT 1', [$chatId]);
+                    $chatTitle = $chatRow['title'] ?? ('Chat ' . $chatId);
+
+                    $top = array_slice($stats['mods'], 0, 5);
+                    $summary = $stats['summary'] ?? [];
+                    $lines = [];
+                    $lines[] = '<b>Weekly Summary</b>';
+                    $lines[] = $chatTitle . ' · ' . $stats['range']['label'];
+                    $lines[] = 'Messages: ' . number_format((int)($summary['messages'] ?? 0));
+                    $lines[] = 'Active hours: ' . number_format(((float)($summary['active_minutes'] ?? 0)) / 60, 1) . 'h';
+                    $lines[] = 'Actions: ' . number_format((int)($summary['warnings'] ?? 0) + (int)($summary['mutes'] ?? 0) + (int)($summary['bans'] ?? 0));
+                    $lines[] = '';
+                    $lines[] = '<b>Top 5 Mods</b>';
+                    $rank = 1;
+                    foreach ($top as $mod) {
+                        $activeH = ((float)($mod['active_minutes'] ?? 0)) / 60;
+                        $presenceH = ((float)($mod['membership_minutes'] ?? 0)) / 60;
+                        $actions = (int)($mod['warnings'] ?? 0) + (int)($mod['mutes'] ?? 0) + (int)($mod['bans'] ?? 0);
+                        $lines[] = $rank . '. ' . $mod['display_name'] . ' · ' . number_format($activeH, 1) . 'h active · ' . number_format($presenceH, 1) . 'h presence · ' . $actions . ' actions';
+                        $rank++;
+                    }
+
+                    $eligibility = $config['eligibility'] ?? [];
+                    $minDays = (int)($eligibility['min_days_active'] ?? 0);
+                    $minMessages = (int)($eligibility['min_messages'] ?? 0);
+                    $alerts = [];
+                    foreach ($stats['mods'] as $mod) {
+                        if ($minDays > 0 && ($mod['days_active'] ?? 0) < $minDays) {
+                            $alerts[] = $mod['display_name'] . ' (low days)';
+                            continue;
+                        }
+                        if ($minMessages > 0 && ($mod['messages'] ?? 0) < $minMessages) {
+                            $alerts[] = $mod['display_name'] . ' (low msgs)';
+                        }
+                    }
+                    if (!empty($alerts)) {
+                        $lines[] = '';
+                        $lines[] = '<b>Alerts</b>';
+                        $lines[] = implode(', ', array_slice($alerts, 0, 8));
+                    }
+
+                    $targets = !empty($managerIds) ? $managerIds : $ownerIds;
+                    if (empty($targets)) {
+                        Logger::info('Weekly summary skipped for chat ' . $chatId . ' (no managers)');
+                    } else {
+                        $message = implode("\n", $lines);
+                        foreach ($targets as $managerId) {
+                            $tg->sendMessage($managerId, $message, ['parse_mode' => 'HTML']);
+                        }
+                        $settingsService->updateWeeklySummaryLast($chatId, $weekKey);
+                        Logger::info('Weekly summary sent for chat ' . $chatId . ' week ' . $weekKey);
                     }
                 }
             }

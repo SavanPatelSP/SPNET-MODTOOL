@@ -34,13 +34,18 @@ class SettingsService
         $progressEnabled = !empty($progressDefaults['enabled']) ? 1 : 0;
         $progressDay = (int)($progressDefaults['day'] ?? 15);
         $progressHour = (int)($progressDefaults['hour'] ?? 12);
+
+        $weeklyDefaults = $this->config['weekly_summary_defaults'] ?? [];
+        $weeklyEnabled = !empty($weeklyDefaults['enabled']) ? 1 : 0;
+        $weeklyWeekday = (int)($weeklyDefaults['weekday'] ?? 1);
+        $weeklyHour = (int)($weeklyDefaults['hour'] ?? 10);
         $approvals = $this->config['approvals'] ?? [];
         $approvalRequired = !empty($approvals['default_required']) ? 1 : 0;
 
         $this->db->exec(
-            'INSERT INTO settings (chat_id, reward_budget, timezone, active_gap_minutes, active_floor_minutes, auto_report_enabled, auto_report_day, auto_report_hour, progress_report_enabled, progress_report_day, progress_report_hour, approval_required, updated_at)
-             VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [$chatId, $timezone, $gap, $floor, $autoEnabled, $autoDay, $autoHour, $progressEnabled, $progressDay, $progressHour, $approvalRequired, $this->nowUtc()]
+            'INSERT INTO settings (chat_id, reward_budget, timezone, active_gap_minutes, active_floor_minutes, auto_report_enabled, auto_report_day, auto_report_hour, progress_report_enabled, progress_report_day, progress_report_hour, weekly_summary_enabled, weekly_summary_weekday, weekly_summary_hour, approval_required, updated_at)
+             VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [$chatId, $timezone, $gap, $floor, $autoEnabled, $autoDay, $autoHour, $progressEnabled, $progressDay, $progressHour, $weeklyEnabled, $weeklyWeekday, $weeklyHour, $approvalRequired, $this->nowUtc()]
         );
 
         return [
@@ -55,6 +60,9 @@ class SettingsService
             'progress_report_enabled' => $progressEnabled,
             'progress_report_day' => $progressDay,
             'progress_report_hour' => $progressHour,
+            'weekly_summary_enabled' => $weeklyEnabled,
+            'weekly_summary_weekday' => $weeklyWeekday,
+            'weekly_summary_hour' => $weeklyHour,
             'approval_required' => $approvalRequired,
         ];
     }
@@ -142,6 +150,33 @@ class SettingsService
         $this->db->exec(
             'UPDATE settings SET progress_report_last_month = ?, progress_report_last_sent_at = ?, updated_at = ? WHERE chat_id = ?',
             [$month, $this->nowUtc(), $this->nowUtc(), $chatId]
+        );
+    }
+
+    public function updateWeeklySummary(int|string $chatId, bool $enabled, ?int $weekday, ?int $hour): void
+    {
+        $fields = ['weekly_summary_enabled = ?', 'updated_at = ?'];
+        $params = [$enabled ? 1 : 0, $this->nowUtc()];
+
+        if ($weekday !== null) {
+            $fields[] = 'weekly_summary_weekday = ?';
+            $params[] = $weekday;
+        }
+        if ($hour !== null) {
+            $fields[] = 'weekly_summary_hour = ?';
+            $params[] = $hour;
+        }
+
+        $params[] = $chatId;
+        $sql = 'UPDATE settings SET ' . implode(', ', $fields) . ' WHERE chat_id = ?';
+        $this->db->exec($sql, $params);
+    }
+
+    public function updateWeeklySummaryLast(int|string $chatId, string $weekKey): void
+    {
+        $this->db->exec(
+            'UPDATE settings SET weekly_summary_last_week = ?, weekly_summary_last_sent_at = ?, updated_at = ? WHERE chat_id = ?',
+            [$weekKey, $this->nowUtc(), $this->nowUtc(), $chatId]
         );
     }
 

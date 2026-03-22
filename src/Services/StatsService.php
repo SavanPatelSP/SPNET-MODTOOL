@@ -310,6 +310,41 @@ class StatsService
         ];
     }
 
+    public function getRollingStats(int|string $chatId, int $days = 7, ?DateTimeImmutable $nowLocal = null): array
+    {
+        $settings = $this->settings->get($chatId);
+        $timezone = $settings['timezone'] ?? ($this->config['timezone'] ?? 'UTC');
+
+        $tz = new DateTimeZone($timezone);
+        $nowLocal = $nowLocal ?: new DateTimeImmutable('now', $tz);
+        $days = max(1, (int)$days);
+        $startLocal = $nowLocal->modify('-' . ($days - 1) . ' days')->setTime(0, 0, 0);
+        $label = 'Last ' . $days . ' days';
+        $range = $this->customRange($startLocal, $nowLocal, $label);
+
+        $mods = $this->getMods($chatId);
+        if (empty($mods)) {
+            return [
+                'mods' => [],
+                'range' => $range,
+                'timezone' => $timezone,
+                'settings' => $settings,
+                'summary' => [],
+            ];
+        }
+
+        $stats = $this->buildStats($chatId, $mods, $range, $settings, $timezone);
+        $summary = $this->buildSummary($stats);
+
+        return [
+            'mods' => $stats,
+            'range' => $range,
+            'timezone' => $timezone,
+            'settings' => $settings,
+            'summary' => $summary,
+        ];
+    }
+
     private function buildStats(int|string $chatId, array $mods, array $range, array $settings, string $timezone): array
     {
         $modIds = array_map(fn($mod) => (int)$mod['user_id'], $mods);
