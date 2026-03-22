@@ -229,7 +229,7 @@ class UpdateHandler
             'plan', 'setplan', 'coach', 'health', 'trend', 'execsummary', 'archive',
             'rosteradd', 'rosterremove', 'rosterlist', 'rosterrole',
             'premium', 'benefits', 'pricing', 'guide', 'giftplan', 'grantplan', 'approval', 'approvereport', 'approvalstatus', 'auditlogcsv',
-            'buy_stars_test', 'buy_crypto_test', 'paystatus', 'debughours', 'finduser',
+            'buy_stars_test', 'buy_crypto_test', 'paystatus', 'debughours', 'debughoursall', 'finduser',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
 
@@ -346,6 +346,9 @@ class UpdateHandler
                         return;
                     case 'debughours':
                         $this->handleDebugHours($chatId, $targetChatId, $message, $cleanArgs);
+                        return;
+                    case 'debughoursall':
+                        $this->handleDebugHoursAll($chatId, $targetChatId, $cleanArgs);
                         return;
                     case 'finduser':
                         $this->handleFindUser($chatId, $targetChatId, $cleanArgs);
@@ -539,6 +542,56 @@ class UpdateHandler
         $lines[] = 'Membership minutes (raw) are derived from join/leave events.';
         $lines[] = 'Active minutes (raw) are computed from message timestamps and gap settings.';
         $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+    }
+
+    private function handleDebugHoursAll(int|string $responseChatId, int|string $chatId, string $args): void
+    {
+        $month = null;
+        $tokens = preg_split('/\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^\d{4}-\d{2}$/', $token)) {
+                $month = $token;
+                break;
+            }
+        }
+
+        $stats = $this->stats->getMonthlyStats($chatId, $month);
+        if (empty($stats['mods'])) {
+            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $range = $stats['range'];
+        $lines = [];
+        $lines[] = '<b>Debug Hours (All Mods)</b>';
+        $lines[] = 'Month: ' . $this->escape($range['label']);
+        $lines[] = '';
+
+        foreach ($stats['mods'] as $mod) {
+            $lines[] = $this->displayName($mod);
+            $lines[] = 'Active minutes: ' . number_format((float)($mod['active_minutes'] ?? 0), 2);
+            $lines[] = 'Presence minutes: ' . number_format((float)($mod['membership_minutes'] ?? 0), 2);
+            $lines[] = 'Internal active minutes: ' . number_format((float)($mod['internal_active_minutes'] ?? 0), 2);
+            $lines[] = 'External active minutes: ' . number_format((float)($mod['external_active_minutes'] ?? 0), 2);
+            $lines[] = 'Messages: ' . number_format((int)($mod['messages'] ?? 0));
+            $lines[] = 'Internal messages: ' . number_format((int)($mod['internal_messages'] ?? 0));
+            $lines[] = 'External messages: ' . number_format((int)($mod['external_messages'] ?? 0));
+            $lines[] = 'Days active: ' . number_format((int)($mod['days_active'] ?? 0));
+            $lines[] = '';
+        }
+
+        $text = implode("\n", $lines);
+        if (strlen($text) > 3500) {
+            $chunks = str_split($text, 3500);
+            foreach ($chunks as $chunk) {
+                $this->tg->sendMessage($responseChatId, $chunk, ['parse_mode' => 'HTML']);
+            }
+            return;
+        }
+        $this->tg->sendMessage($responseChatId, $text, ['parse_mode' => 'HTML']);
     }
 
     private function handleFindUser(int|string $responseChatId, int|string $chatId, string $args): void
@@ -2830,6 +2883,7 @@ class UpdateHandler
                 '/modremove [chat_id] &lt;@username|user_id&gt;',
                 '/modlist [chat_id]',
                 '/debughours [chat_id] [YYYY-MM] [@user]',
+                '/debughoursall [chat_id] [YYYY-MM]',
                 '/rosteradd &lt;@username|user_id&gt; &lt;role&gt; [notes]',
                 '/rosterrole &lt;@username|user_id&gt; &lt;role&gt; [notes]',
                 '/rosterremove &lt;@username|user_id&gt;',
@@ -2905,6 +2959,7 @@ class UpdateHandler
             'Presence hours = membership time in the chat',
             '<code>/debughours</code>',
             '<code>/debughours 2026-02 @alex</code>',
+            '<code>/debughoursall 2026-02</code>',
             '',
             '<b>Reward sheets</b>',
             '<code>/report 2026-02 5000</code>',
