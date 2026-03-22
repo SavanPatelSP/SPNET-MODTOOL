@@ -229,7 +229,7 @@ class UpdateHandler
             'plan', 'setplan', 'coach', 'health', 'trend', 'execsummary', 'archive',
             'rosteradd', 'rosterremove', 'rosterlist', 'rosterrole',
             'premium', 'benefits', 'pricing', 'guide', 'giftplan', 'grantplan', 'approval', 'approvereport', 'approvalstatus', 'auditlogcsv',
-            'buy_stars_test', 'buy_crypto_test', 'paystatus', 'debughours',
+            'buy_stars_test', 'buy_crypto_test', 'paystatus', 'debughours', 'finduser',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
 
@@ -346,6 +346,9 @@ class UpdateHandler
                         return;
                     case 'debughours':
                         $this->handleDebugHours($chatId, $targetChatId, $message, $cleanArgs);
+                        return;
+                    case 'finduser':
+                        $this->handleFindUser($chatId, $targetChatId, $cleanArgs);
                         return;
                     case 'modadd':
                         $this->handleModAddPrivate($chatId, $targetChatId, $cleanArgs, $message);
@@ -535,6 +538,66 @@ class UpdateHandler
         $lines[] = 'Days active: ' . number_format((int)($target['days_active'] ?? 0));
         $lines[] = 'Membership minutes (raw) are derived from join/leave events.';
         $lines[] = 'Active minutes (raw) are computed from message timestamps and gap settings.';
+        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+    }
+
+    private function handleFindUser(int|string $responseChatId, int|string $chatId, string $args): void
+    {
+        $query = trim($args);
+        if ($query === '' || strtolower($query) === 'help') {
+            $this->tg->sendMessage($responseChatId, 'Usage: /finduser &lt;name|@username|user_id&gt; [chat_id]', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        if (strpos($query, '@') === 0) {
+            $query = substr($query, 1);
+        }
+
+        if (is_numeric($query)) {
+            $row = $this->db->fetch(
+                'SELECT u.id, u.username, u.first_name, u.last_name, cm.is_mod
+                 FROM chat_members cm
+                 JOIN users u ON u.id = cm.user_id
+                 WHERE cm.chat_id = ? AND u.id = ? LIMIT 1',
+                [$chatId, (int)$query]
+            );
+            if (!$row) {
+                $this->tg->sendMessage($responseChatId, 'No matching user found in this chat.', ['parse_mode' => 'HTML']);
+                return;
+            }
+            $role = !empty($row['is_mod']) ? 'mod' : 'member';
+            $line = $row['id'] . ' | ' . $this->displayName($row) . ' | ' . $role;
+            $this->tg->sendMessage($responseChatId, $line, ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $like = '%' . $query . '%';
+        $rows = $this->db->fetchAll(
+            'SELECT u.id, u.username, u.first_name, u.last_name, cm.is_mod
+             FROM chat_members cm
+             JOIN users u ON u.id = cm.user_id
+             WHERE cm.chat_id = ?
+               AND (
+                    u.username LIKE ?
+                    OR u.first_name LIKE ?
+                    OR u.last_name LIKE ?
+                    OR CONCAT_WS(" ", u.first_name, u.last_name) LIKE ?
+               )
+             ORDER BY cm.is_mod DESC, u.username IS NULL, u.username ASC, u.first_name ASC
+             LIMIT 15',
+            [$chatId, $like, $like, $like, $like]
+        );
+
+        if (empty($rows)) {
+            $this->tg->sendMessage($responseChatId, 'No matching users found in this chat.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $lines = ['Matches:'];
+        foreach ($rows as $row) {
+            $role = !empty($row['is_mod']) ? 'mod' : 'member';
+            $lines[] = $row['id'] . ' | ' . $this->displayName($row) . ' | ' . $role;
+        }
         $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
     }
 
@@ -2733,6 +2796,7 @@ class UpdateHandler
                 '/usechat &lt;chat_id&gt; | /usechat &lt;title&gt; | /usechat off',
                 '/guide (full usage guide with examples)',
                 '/stats [chat_id] [YYYY-MM] [@user]',
+                '/finduser &lt;name|@username|user_id&gt; [chat_id]',
                 '/leaderboard [chat_id] [YYYY-MM] [budget]',
                 '/report [chat_id] [YYYY-MM] [budget]',
                 '/reportcsv [chat_id] [YYYY-MM] [budget]',
@@ -2765,6 +2829,7 @@ class UpdateHandler
                 '/modadd [chat_id] &lt;@username|user_id&gt;',
                 '/modremove [chat_id] &lt;@username|user_id&gt;',
                 '/modlist [chat_id]',
+                '/debughours [chat_id] [YYYY-MM] [@user]',
                 '/rosteradd &lt;@username|user_id&gt; &lt;role&gt; [notes]',
                 '/rosterrole &lt;@username|user_id&gt; &lt;role&gt; [notes]',
                 '/rosterremove &lt;@username|user_id&gt;',
@@ -2828,6 +2893,8 @@ class UpdateHandler
             '<code>/stats 2026-02</code>',
             '<code>/stats @alex</code>',
             '<code>/stats &lt;chat_id&gt; 2026-02 @alex</code>',
+            '<code>/finduser alex</code>',
+            '<code>/finduser @alex</code>',
             '',
             '<b>Leaderboards</b>',
             '<code>/leaderboard</code>',
