@@ -193,6 +193,61 @@ foreach ($rows as $row) {
                         $rank++;
                     }
 
+                    $weights = $config['score_weights'] ?? [];
+                    $ranked = [];
+                    foreach ($stats['mods'] as $mod) {
+                        $messages = (int)($mod['messages'] ?? 0);
+                        $activeMinutes = (float)($mod['active_minutes'] ?? 0);
+                        $daysActive = (int)($mod['days_active'] ?? 0);
+                        $warnings = (int)($mod['warnings'] ?? 0);
+                        $mutes = (int)($mod['mutes'] ?? 0);
+                        $bans = (int)($mod['bans'] ?? 0);
+                        $actions = $warnings + $mutes + $bans;
+                        $roleMultiplier = (float)($mod['role_multiplier'] ?? 1.0);
+
+                        $chatScore = 0.0;
+                        $chatScore += log(1 + $messages) * ($weights['message'] ?? 1.0);
+                        $chatScore += sqrt($activeMinutes) * ($weights['active_minute'] ?? 0.0);
+                        $chatScore += $daysActive * ($weights['day_active'] ?? 0.0);
+                        $chatScore *= $roleMultiplier;
+
+                        $actionScore = 0.0;
+                        $actionScore += $warnings * ($weights['warn'] ?? 1.0);
+                        $actionScore += $mutes * ($weights['mute'] ?? 1.0);
+                        $actionScore += $bans * ($weights['ban'] ?? 1.0);
+                        $actionScore *= $roleMultiplier;
+
+                        $ranked[] = [
+                            'display_name' => $mod['display_name'],
+                            'messages' => $messages,
+                            'active_hours' => $activeMinutes / 60,
+                            'actions' => $actions,
+                            'chat_score' => $chatScore,
+                            'action_score' => $actionScore,
+                        ];
+                    }
+
+                    usort($ranked, fn($a, $b) => $b['chat_score'] <=> $a['chat_score']);
+                    $chatRank = array_slice($ranked, 0, 5);
+                    $rankedActions = $ranked;
+                    usort($rankedActions, fn($a, $b) => $b['action_score'] <=> $a['action_score']);
+                    $actionRank = array_slice($rankedActions, 0, 5);
+
+                    $lines[] = '';
+                    $lines[] = '<b>Chat Work Ranking</b>';
+                    $rank = 1;
+                    foreach ($chatRank as $mod) {
+                        $lines[] = $rank . '. ' . $mod['display_name'] . ' · ' . number_format($mod['chat_score'], 2) . ' score · ' . number_format($mod['active_hours'], 1) . 'h active · ' . number_format((int)$mod['messages']) . ' msgs';
+                        $rank++;
+                    }
+                    $lines[] = '';
+                    $lines[] = '<b>Moderation Actions Ranking</b>';
+                    $rank = 1;
+                    foreach ($actionRank as $mod) {
+                        $lines[] = $rank . '. ' . $mod['display_name'] . ' · ' . number_format($mod['action_score'], 2) . ' score · ' . $mod['actions'] . ' actions';
+                        $rank++;
+                    }
+
                     $eligibility = $config['eligibility'] ?? [];
                     $minDays = (int)($eligibility['min_days_active'] ?? 0);
                     $minMessages = (int)($eligibility['min_messages'] ?? 0);

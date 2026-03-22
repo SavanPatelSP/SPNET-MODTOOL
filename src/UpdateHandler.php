@@ -229,7 +229,7 @@ class UpdateHandler
             'plan', 'setplan', 'coach', 'health', 'trend', 'execsummary', 'archive',
             'rosteradd', 'rosterremove', 'rosterlist', 'rosterrole',
             'premium', 'benefits', 'pricing', 'guide', 'giftplan', 'grantplan', 'approval', 'approvereport', 'approvalstatus', 'auditlogcsv',
-            'buy_stars_test', 'buy_crypto_test', 'paystatus', 'debughours', 'debughoursall', 'finduser', 'autoweekly', 'autoinactive',
+            'buy_stars_test', 'buy_crypto_test', 'paystatus', 'debughours', 'debughoursall', 'finduser', 'autoweekly', 'autoinactive', 'activityrank',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
 
@@ -346,6 +346,9 @@ class UpdateHandler
                         return;
                     case 'autoinactive':
                         $this->handleAutoInactive($chatId, $targetChatId, $cleanArgs);
+                        return;
+                    case 'activityrank':
+                        $this->handleActivityRank($chatId, $targetChatId, $cleanArgs, $userId);
                         return;
                     case 'progress':
                         $this->handleProgressReport($chatId, $targetChatId, $cleanArgs);
@@ -2585,6 +2588,131 @@ class UpdateHandler
         $this->tg->sendMessage($responseChatId, 'Usage: /autoinactive on [days] [hour] [chat_id] | /autoinactive off [chat_id] | /autoinactive status [chat_id]', ['parse_mode' => 'HTML']);
     }
 
+    private function handleActivityRank(int|string $responseChatId, int|string $chatId, string $args, int|string $userId): void
+    {
+        if (!$this->isManager($userId)) {
+            $this->tg->sendMessage($responseChatId, 'Only bot managers or owners can send activity rankings.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $month = null;
+        $topN = 5;
+        $tokens = preg_split('/\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^\d{4}-\d{2}$/', $token)) {
+                $month = $token;
+                continue;
+            }
+            if (is_numeric($token)) {
+                $topN = (int)$token;
+            }
+        }
+        $topN = max(1, min(10, $topN));
+
+        $stats = $this->stats->getMonthlyStats($chatId, $month);
+        if (empty($stats['mods'])) {
+            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $chatRow = $this->db->fetch('SELECT title FROM chats WHERE id = ? LIMIT 1', [$chatId]);
+        $chatTitle = $chatRow['title'] ?? ('Chat ' . $chatId);
+        $rangeLabel = $stats['range']['label'] ?? ($month ?? 'current month');
+
+        [$chatRank, $actionRank] = $this->buildActivityRanks($stats['mods'], $topN);
+
+        $lines = [];
+        $lines[] = '<b>Activity Rankings</b>';
+        $lines[] = $this->escape($chatTitle) . ' · ' . $this->escape($rangeLabel);
+        $lines[] = '';
+        $lines[] = '<b>Chat Work</b>';
+        $rank = 1;
+        foreach ($chatRank as $mod) {
+            $lines[] = $rank . '. ' . $mod['display_name'] . ' · ' . number_format($mod['chat_score'], 2) . ' score · ' . number_format($mod['active_hours'], 1) . 'h active · ' . number_format((int)$mod['messages']) . ' msgs';
+            $rank++;
+        }
+        $lines[] = '';
+        $lines[] = '<b>Moderation Actions</b>';
+        $rank = 1;
+        foreach ($actionRank as $mod) {
+            $lines[] = $rank . '. ' . $mod['display_name'] . ' · ' . number_format($mod['action_score'], 2) . ' score · ' . $mod['actions'] . ' actions';
+            $rank++;
+        }
+
+        $targets = $this->getManagerTargets();
+        if (empty($targets)) {
+            $this->tg->sendMessage($responseChatId, 'No managers configured in config.local.php (manager_user_ids).', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $message = implode("\n", $lines);
+        foreach ($targets as $managerId) {
+            $this->tg->sendMessage($managerId, $message, ['parse_mode' => 'HTML']);
+        }
+    }
+
+    private function buildActivityRanks(array $mods, int $topN): array
+    {
+        $weights = $this->config['score_weights'] ?? [];
+        $ranked = [];
+        foreach ($mods as $mod) {
+            $messages = (int)($mod['messages'] ?? 0);
+            $activeMinutes = (float)($mod['active_minutes'] ?? 0);
+            $daysActive = (int)($mod['days_active'] ?? 0);
+            $warnings = (int)($mod['warnings'] ?? 0);
+            $mutes = (int)($mod['mutes'] ?? 0);
+            $bans = (int)($mod['bans'] ?? 0);
+            $actions = $warnings + $mutes + $bans;
+            $roleMultiplier = (float)($mod['role_multiplier'] ?? 1.0);
+
+            $chatScore = 0.0;
+            $chatScore += log(1 + $messages) * ($weights['message'] ?? 1.0);
+            $chatScore += sqrt($activeMinutes) * ($weights['active_minute'] ?? 0.0);
+            $chatScore += $daysActive * ($weights['day_active'] ?? 0.0);
+            $chatScore *= $roleMultiplier;
+
+            $actionScore = 0.0;
+            $actionScore += $warnings * ($weights['warn'] ?? 1.0);
+            $actionScore += $mutes * ($weights['mute'] ?? 1.0);
+            $actionScore += $bans * ($weights['ban'] ?? 1.0);
+            $actionScore *= $roleMultiplier;
+
+            $ranked[] = [
+                'display_name' => $mod['display_name'],
+                'messages' => $messages,
+                'active_hours' => $activeMinutes / 60,
+                'actions' => $actions,
+                'chat_score' => $chatScore,
+                'action_score' => $actionScore,
+            ];
+        }
+
+        $chatRank = $ranked;
+        usort($chatRank, fn($a, $b) => $b['chat_score'] <=> $a['chat_score']);
+        $actionRank = $ranked;
+        usort($actionRank, fn($a, $b) => $b['action_score'] <=> $a['action_score']);
+
+        return [
+            array_slice($chatRank, 0, $topN),
+            array_slice($actionRank, 0, $topN),
+        ];
+    }
+
+    private function getManagerTargets(): array
+    {
+        $managerIds = $this->config['manager_user_ids'] ?? [];
+        $ownerIds = $this->config['owner_user_ids'] ?? [];
+        $targets = array_merge(
+            is_array($managerIds) ? $managerIds : [],
+            is_array($ownerIds) ? $ownerIds : []
+        );
+        $targets = array_values(array_unique(array_filter(array_map('intval', $targets))));
+        return $targets;
+    }
+
     private function handleProgressReport(int|string $responseChatId, int|string $chatId, string $args): void
     {
         $budget = null;
@@ -2982,6 +3110,7 @@ class UpdateHandler
                 '/autoprogress on [day] [hour] [chat_id]',
                 '/autoweekly on [weekday] [hour] [chat_id]',
                 '/autoinactive on [days] [hour] [chat_id]',
+                '/activityrank [chat_id] [YYYY-MM] [top]',
                 '/progress [chat_id] [budget]',
                 '/modadd [chat_id] &lt;@username|user_id&gt;',
                 '/modremove [chat_id] &lt;@username|user_id&gt;',
@@ -3053,6 +3182,7 @@ class UpdateHandler
             '<code>/stats &lt;chat_id&gt; 2026-02 @alex</code>',
             '<code>/finduser alex</code>',
             '<code>/finduser @alex</code>',
+            '<code>/activityrank 2026-02 5</code>',
             '',
             '<b>Leaderboards</b>',
             '<code>/leaderboard</code>',
