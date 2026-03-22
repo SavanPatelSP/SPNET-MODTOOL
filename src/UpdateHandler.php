@@ -2504,6 +2504,11 @@ class UpdateHandler
              VALUES (?, ?, ?, ?)',
             [$chatId, $userId, $messageId, $sentAt]
         );
+
+        $chatType = $message['chat']['type'] ?? '';
+        if (in_array($chatType, ['group', 'supergroup'], true)) {
+            $this->ensureMembershipOpen($chatId, $userId, (int)$message['date']);
+        }
     }
 
     private function recordAction(int|string $chatId, int|string $modId, int|string $targetId, string $type, ?string $reason, ?int $durationMinutes): void
@@ -2523,6 +2528,18 @@ class UpdateHandler
              VALUES (?, ?, ?, NULL)',
             [$chatId, $userId, $joinedAt]
         );
+    }
+
+    private function ensureMembershipOpen(int|string $chatId, int|string $userId, int $timestamp): void
+    {
+        $existing = $this->db->fetch(
+            'SELECT id FROM memberships WHERE chat_id = ? AND user_id = ? AND left_at IS NULL ORDER BY joined_at DESC LIMIT 1',
+            [$chatId, $userId]
+        );
+        if ($existing) {
+            return;
+        }
+        $this->recordMembershipJoin($chatId, $userId, $timestamp);
     }
 
     private function recordMembershipLeave(int|string $chatId, int|string $userId, int $timestamp): void
@@ -2811,8 +2828,10 @@ class UpdateHandler
         $lines[] = 'Warnings issued: ' . $stat['warnings'];
         $lines[] = 'Mutes issued: ' . $stat['mutes'];
         $lines[] = 'Bans issued: ' . $stat['bans'];
-        $lines[] = 'Active minutes: ' . number_format($stat['active_minutes'], 1);
-        $lines[] = 'Membership minutes: ' . number_format($stat['membership_minutes'], 1);
+        $activeMinutes = (float)($stat['active_minutes'] ?? 0);
+        $membershipMinutes = (float)($stat['membership_minutes'] ?? 0);
+        $lines[] = 'Active hours: ' . number_format($activeMinutes / 60, 2) . 'h (' . number_format($activeMinutes, 1) . ' min)';
+        $lines[] = 'Presence hours: ' . number_format($membershipMinutes / 60, 2) . 'h (' . number_format($membershipMinutes, 1) . ' min)';
         $lines[] = 'Days active: ' . $stat['days_active'];
         $lines[] = 'Peak hour: ' . $stat['peak_hour'];
         if ($stat['improvement'] !== null) {

@@ -50,6 +50,51 @@ class ExternalImportService
             }
         }
 
+        $normalize = static function (string $value): string {
+            $value = strtolower(trim($value));
+            return preg_replace('/[^a-z0-9]/', '', $value);
+        };
+
+        $normalizedHeader = [];
+        foreach ($header as $idx => $name) {
+            $normalizedHeader[$normalize($name)] = $idx;
+        }
+
+        $findColumn = static function (array $normalizedHeader, array $candidates) use ($normalize): ?int {
+            foreach ($candidates as $candidate) {
+                $key = $normalize($candidate);
+                if (isset($normalizedHeader[$key])) {
+                    return $normalizedHeader[$key];
+                }
+            }
+            return null;
+        };
+
+        $colActive = $findColumn($normalizedHeader, ['activeminutes', 'active', 'activetime', 'onlinetime', 'timeonline', 'activehours']);
+
+        $parseMinutes = static function ($value): int {
+            $value = trim((string)$value);
+            if ($value === '') {
+                return 0;
+            }
+            if (is_numeric($value)) {
+                return (int)$value;
+            }
+            if (strpos($value, ':') !== false) {
+                [$h, $m] = array_pad(explode(':', $value, 2), 2, 0);
+                return ((int)$h * 60) + (int)$m;
+            }
+            $hours = 0;
+            $minutes = 0;
+            if (preg_match('/(\\d+)\\s*h/i', $value, $m)) {
+                $hours = (int)$m[1];
+            }
+            if (preg_match('/(\\d+)\\s*m/i', $value, $m)) {
+                $minutes = (int)$m[1];
+            }
+            return ($hours * 60) + $minutes;
+        };
+
         $now = gmdate('Y-m-d H:i:s');
         $rows = 0;
         $imported = 0;
@@ -67,6 +112,7 @@ class ExternalImportService
             $messageCount = isset($map['MessageCount']) ? (int)trim($row[$map['MessageCount']] ?? 0) : 0;
             $replyCount = isset($map['ReplyCount']) ? (int)trim($row[$map['ReplyCount']] ?? 0) : 0;
             $reputationTake = isset($map['ReputationTake']) ? (int)trim($row[$map['ReputationTake']] ?? 0) : 0;
+            $activeMinutes = ($colActive !== null && isset($row[$colActive])) ? $parseMinutes($row[$colActive]) : 0;
 
             $username = $login !== '' ? $login : null;
             $firstName = $name !== '' ? $name : null;
@@ -88,9 +134,9 @@ class ExternalImportService
 
             $this->db->exec(
                 'INSERT INTO external_user_stats (chat_id, user_id, source, month, messages, replies, reputation_take, warnings, mutes, bans, active_minutes, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?)
-                 ON DUPLICATE KEY UPDATE messages = VALUES(messages), replies = VALUES(replies), reputation_take = VALUES(reputation_take), updated_at = VALUES(updated_at)',
-                [$chatId, $userId, $source, $month, $messageCount, $replyCount, $reputationTake, $now, $now]
+                 VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE messages = VALUES(messages), replies = VALUES(replies), reputation_take = VALUES(reputation_take), active_minutes = VALUES(active_minutes), updated_at = VALUES(updated_at)',
+                [$chatId, $userId, $source, $month, $messageCount, $replyCount, $reputationTake, $activeMinutes, $now, $now]
             );
 
             $imported++;
