@@ -7,6 +7,7 @@ use App\Services\SettingsService;
 use App\Services\StatsService;
 use App\Services\RewardService;
 use App\Services\RewardContextService;
+use App\Services\AuditLogService;
 
 $dashboardConfig = $config['dashboard'] ?? [];
 $token = $dashboardConfig['token'] ?? null;
@@ -28,6 +29,7 @@ $db = new Database($config['db']);
 $settingsService = new SettingsService($db, $config);
 $statsService = new StatsService($db, $settingsService, $config);
 $rewardService = new RewardService($config);
+$rewardService->setAuditLogger(new AuditLogService($db));
 $rewardContext = new RewardContextService($db, $config);
 
 $chatId = $_GET['chat_id'] ?? ($dashboardConfig['default_chat_id'] ?? null);
@@ -76,11 +78,19 @@ foreach ($chats as $chat) {
 if ($isAll) {
     $bundle = $statsService->getMonthlyStatsForChats($chatIds, $month);
     $budget = $budgetOverride ?? 0.0;
-    $context = ['premium' => false];
+    $context = [
+        'premium' => false,
+        'chat_id' => null,
+        'month' => $bundle['range']['month'] ?? $month,
+        'source' => 'dashboard_all',
+    ];
 } else {
     $bundle = $statsService->getMonthlyStats($chatId, $month);
     $budget = $budgetOverride ?? (float)($bundle['settings']['reward_budget'] ?? 0);
     $context = $rewardContext->build($chatId, $bundle['range']['month']);
+    $context['chat_id'] = (int)$chatId;
+    $context['month'] = $bundle['range']['month'] ?? $month;
+    $context['source'] = 'dashboard';
 }
 
 $ranked = $rewardService->rankAndReward($bundle['mods'], $budget, $context);

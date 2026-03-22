@@ -14,6 +14,7 @@ use App\Services\SubscriptionService;
 use App\Services\NotificationService;
 use App\Services\PerformanceReviewService;
 use App\Services\RetentionRiskService;
+use App\Services\AuditLogService;
 use App\Reports\RewardSheet;
 use App\Logger;
 use App\Services\ChangelogService;
@@ -32,6 +33,7 @@ $changelog->sendIfUpdated($tg, $config, 'scheduler');
 $settingsService = new SettingsService($db, $config);
 $statsService = new StatsService($db, $settingsService, $config);
 $rewardService = new RewardService($config);
+$rewardService->setAuditLogger(new AuditLogService($db));
 $rewardContext = new RewardContextService($db, $config);
 $rewardHistory = new RewardHistoryService($db);
 $archive = new ArchiveService($db);
@@ -196,7 +198,11 @@ foreach ($rows as $row) {
                             $notifications->markSent($chatId, 'auto_report_owner', $targetMonth);
                         }
                         if ($isPremium && $congratsEnabled && !empty($ownerIds) && !$notifications->wasSent($chatId, 'congrats', $targetMonth)) {
-                            $ranked = $rewardService->rankAndReward($stats['mods'], $budget, $rewardContext->build($chatId, $targetMonth));
+                            $context = $rewardContext->build($chatId, $targetMonth);
+                            $context['chat_id'] = (int)$chatId;
+                            $context['month'] = $targetMonth;
+                            $context['source'] = 'auto_congrats';
+                            $ranked = $rewardService->rankAndReward($stats['mods'], $budget, $context);
                             $top = array_slice($ranked, 0, 3);
                             $lines = ['Congrats templates for ' . $stats['range']['label'] . ':'];
                             foreach ($top as $mod) {

@@ -30,6 +30,9 @@ class RewardCsv
         $bundle = $this->stats->getMonthlyStats($chatId, $month);
         $mods = $bundle['mods'];
         $context = $this->contextService ? $this->contextService->build($chatId, $bundle['range']['month']) : [];
+        $context['chat_id'] = (int)$chatId;
+        $context['month'] = $bundle['range']['month'] ?? $month;
+        $context['source'] = 'reward_csv';
         $ranked = $this->rewards->rankAndReward($mods, $budget, $context);
 
         $rewardMap = [];

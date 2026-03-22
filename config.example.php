@@ -269,6 +269,13 @@ return [
         'log_updates' => false,      // true = log every message update (very noisy)
     ],
 
+    // Audit log (transparency)
+    'audit' => [
+        'score_log_enabled' => true,
+        // detailed = log every mod score, summary = top 10 only
+        'score_log_level' => 'detailed',
+    ],
+
     // Google Sheets export (webhook-based; use Apps Script)
     'google_sheets' => [
         'webhook_url' => null,

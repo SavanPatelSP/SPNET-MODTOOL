@@ -5,10 +5,18 @@ namespace App\Services;
 class RewardService
 {
     private array $config;
+    private array $auditConfig;
+    private ?AuditLogService $audit = null;
 
     public function __construct(array $config)
     {
         $this->config = $config;
+        $this->auditConfig = $config['audit'] ?? [];
+    }
+
+    public function setAuditLogger(?AuditLogService $audit): void
+    {
+        $this->audit = $audit;
     }
 
     public function rankAndReward(array $mods, float $budget, array $context = []): array
@@ -109,6 +117,7 @@ class RewardService
         $bonusMap = $this->buildBonusMap($eligible, $bonusPool, $bonusSplit);
 
         $adjustedScores = [];
+        $adjustedMap = [];
         $total = 0.0;
         $rank = 1;
         foreach ($eligibleTop as $mod) {
@@ -125,6 +134,7 @@ class RewardService
                 $adjusted *= max(0.0, 1 - ($penalty * $penaltyDecay));
             }
             $adjustedScores[] = $adjusted;
+            $adjustedMap[$mod['user_id']] = $adjusted;
             $total += $adjusted;
             $rank++;
         }
@@ -191,7 +201,107 @@ class RewardService
             }
         }
 
+        $this->logScoreAudit(
+            $final,
+            $context,
+            $rankBy,
+            $scoreComponents,
+            $ranges,
+            $adjustedMap,
+            $budget,
+            $baseBudget,
+            $bonusPool,
+            $topN,
+            $scoreExponent,
+            $baseStipendPercent,
+            $minReward
+        );
+
         return $final;
+    }
+
+    private function logScoreAudit(
+        array $mods,
+        array $context,
+        string $rankBy,
+        array $scoreComponents,
+        array $ranges,
+        array $adjustedMap,
+        float $budget,
+        float $baseBudget,
+        float $bonusPool,
+        int $topN,
+        float $scoreExponent,
+        float $baseStipendPercent,
+        float $minReward
+    ): void {
+        if ($this->audit === null || empty($this->auditConfig['score_log_enabled'])) {
+            return;
+        }
+
+        $actorId = (int)($context['actor_id'] ?? 0);
+        $chatId = isset($context['chat_id']) ? (int)$context['chat_id'] : null;
+        $level = strtolower((string)($this->auditConfig['score_log_level'] ?? 'detailed'));
+        if (!in_array($level, ['summary', 'detailed'], true)) {
+            $level = 'detailed';
+        }
+
+        $rankMap = [];
+        $rank = 1;
+        foreach ($mods as $mod) {
+            if (!empty($mod['eligible'])) {
+                $rankMap[$mod['user_id']] = $rank;
+                $rank++;
+            }
+        }
+
+        $entries = [];
+        foreach ($mods as $mod) {
+            $actions = (int)($mod['warnings'] ?? 0) + (int)($mod['mutes'] ?? 0) + (int)($mod['bans'] ?? 0);
+            $entries[] = [
+                'user_id' => $mod['user_id'],
+                'name' => $mod['display_name'] ?? null,
+                'eligible' => (bool)($mod['eligible'] ?? true),
+                'rank' => $rankMap[$mod['user_id']] ?? null,
+                'score' => (float)($mod['score'] ?? 0),
+                'reward_score' => $mod['reward_score'] ?? null,
+                'impact_score' => (float)($mod['impact_score'] ?? 0),
+                'consistency_index' => (float)($mod['consistency_index'] ?? 0),
+                'messages' => (int)($mod['messages'] ?? 0),
+                'active_minutes' => (float)($mod['active_minutes'] ?? 0),
+                'days_active' => (int)($mod['days_active'] ?? 0),
+                'actions' => $actions,
+                'role_multiplier' => (float)($mod['role_multiplier'] ?? 1.0),
+                'adjusted_score' => $adjustedMap[$mod['user_id']] ?? null,
+                'reward' => (float)($mod['reward'] ?? 0),
+                'bonus' => (float)($mod['bonus'] ?? 0),
+            ];
+        }
+
+        if ($level === 'summary') {
+            usort($entries, fn($a, $b) => ($b['reward'] ?? 0) <=> ($a['reward'] ?? 0));
+            $entries = array_slice($entries, 0, 10);
+        }
+
+        $meta = [
+            'source' => $context['source'] ?? null,
+            'month' => $context['month'] ?? null,
+            'budget' => $budget,
+            'base_budget' => $baseBudget,
+            'bonus_pool' => $bonusPool,
+            'rank_by' => $rankBy,
+            'score_exponent' => $scoreExponent,
+            'base_stipend_percent' => $baseStipendPercent,
+            'min_reward' => $minReward,
+            'top_n' => $topN,
+            'score_components' => $scoreComponents,
+            'component_ranges' => $ranges,
+            'eligible_total' => count(array_filter($mods, static fn($mod) => !empty($mod['eligible']))),
+            'total_mods' => count($mods),
+            'mods' => $entries,
+        ];
+
+        $this->audit->log('score_calc', $actorId, $chatId, $meta);
     }
 
     private function buildBonusMap(array $mods, float $bonusPool, array $bonusSplit): array

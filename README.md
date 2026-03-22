@@ -12,6 +12,7 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
 - KPI bonus pool (Top Mod / Most Active / Most Improved)
 - Performance badges (Top Helper / Most Balanced / Consistency King / Fast Responder)
 - Approval workflow + audit log exports
+- Audit scoring logs (every reward calculation recorded)
 - Role multipliers for senior/lead moderators
 - Insights: most active, most improved, most consistent, peak hour
 - Test payments (Telegram Stars / crypto)

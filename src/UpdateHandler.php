@@ -73,6 +73,7 @@ class UpdateHandler
         $this->archive = new ArchiveService($db);
         $this->approvals = new ReportApprovalService($db);
         $this->audit = new AuditLogService($db);
+        $this->rewards->setAuditLogger($this->audit);
         $this->payments = new PaymentService($db, $config);
         $this->coaching = new CoachingService($this->stats, $this->settings, $config);
         $this->health = new HealthService($this->stats, $this->settings, $config);
@@ -915,6 +916,10 @@ class UpdateHandler
         }
 
         $context = $this->rewardContext->build($chatId, $stats['range']['month']);
+        $context['chat_id'] = (int)$chatId;
+        $context['month'] = $stats['range']['month'] ?? $month;
+        $context['source'] = 'leaderboard';
+        $context['actor_id'] = (int)$responseChatId;
         $ranked = $this->rewards->rankAndReward($stats['mods'], $budget, $context);
         $text = $this->formatLeaderboardMessage($ranked, $stats['range'], $budget);
         $this->tg->sendMessage($responseChatId, $text, ['parse_mode' => 'HTML']);
@@ -1110,6 +1115,10 @@ class UpdateHandler
         }
 
         $context = $this->rewardContext->build($chatId, $stats['range']['month']);
+        $context['chat_id'] = (int)$chatId;
+        $context['month'] = $stats['range']['month'] ?? $month;
+        $context['source'] = 'export_gsheet';
+        $context['actor_id'] = (int)$responseChatId;
         $ranked = $this->rewards->rankAndReward($stats['mods'], $budget, $context);
         $rewardMap = [];
         foreach ($ranked as $mod) {
@@ -3921,6 +3930,7 @@ class UpdateHandler
             '<code>/approvereport 2026-02</code>',
             '<code>/approvalstatus 2026-02</code>',
             '<code>/auditlogcsv 200</code>',
+            'Score audits: every reward calculation is logged as <code>score_calc</code>.',
             '',
             '<b>Test payments (Stars + Crypto)</b>',
             '<code>/buy_stars_test 500</code>',

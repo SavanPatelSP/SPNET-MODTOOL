@@ -28,6 +28,9 @@ class ExecutiveSummary
     {
         $bundle = $this->stats->getMonthlyStats($chatId, $month);
         $context = $this->contextService ? $this->contextService->build($chatId, $bundle['range']['month']) : [];
+        $context['chat_id'] = (int)$chatId;
+        $context['month'] = $bundle['range']['month'] ?? $month;
+        $context['source'] = 'executive_summary';
         $ranked = $this->rewards->rankAndReward($bundle['mods'], $budget, $context);
 
         $summary = $bundle['summary'];

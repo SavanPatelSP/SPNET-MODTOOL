@@ -22,7 +22,12 @@ class MultiChatReport
     {
         $bundle = $this->stats->getMonthlyStatsForChats($chatIds, $month);
         $mods = $bundle['mods'];
-        $ranked = $budget !== null ? $this->rewards->rankAndReward($mods, $budget) : $mods;
+        $context = [
+            'chat_id' => null,
+            'month' => $bundle['range']['month'] ?? $month,
+            'source' => 'multi_chat_summary',
+        ];
+        $ranked = $budget !== null ? $this->rewards->rankAndReward($mods, $budget, $context) : $mods;
 
         $rewardMap = [];
         foreach ($ranked as $item) {

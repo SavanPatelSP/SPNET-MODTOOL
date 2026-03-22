@@ -34,6 +34,9 @@ class TrendReport
         $prevBundle = $this->stats->getMonthlyStats($chatId, $prevMonth);
 
         $context = $this->contextService ? $this->contextService->build($chatId, $currentMonth) : [];
+        $context['chat_id'] = (int)$chatId;
+        $context['month'] = $currentMonth;
+        $context['source'] = 'trend_report';
         $ranked = $this->rewards->rankAndReward($bundle['mods'], $budget, $context);
 
         $summary = $bundle['summary'];

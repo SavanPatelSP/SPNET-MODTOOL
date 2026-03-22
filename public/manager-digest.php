@@ -8,6 +8,7 @@ use App\Services\StatsService;
 use App\Services\RewardService;
 use App\Services\RewardContextService;
 use App\Services\RetentionRiskService;
+use App\Services\AuditLogService;
 
 $dashboardConfig = $config['dashboard'] ?? [];
 $token = $dashboardConfig['token'] ?? null;
@@ -29,6 +30,7 @@ $db = new Database($config['db']);
 $settingsService = new SettingsService($db, $config);
 $statsService = new StatsService($db, $settingsService, $config);
 $rewardService = new RewardService($config);
+$rewardService->setAuditLogger(new AuditLogService($db));
 $rewardContext = new RewardContextService($db, $config);
 $retentionRisk = new RetentionRiskService($statsService, $settingsService, $config);
 
@@ -60,6 +62,9 @@ $chatTitle = $chatRow['title'] ?? ('Chat ' . $chatId);
 
 $budget = $budgetOverride ?? (float)($bundle['settings']['reward_budget'] ?? 0);
 $context = $rewardContext->build($chatId, $range['month'] ?? null);
+$context['chat_id'] = (int)$chatId;
+$context['month'] = $range['month'] ?? $month;
+$context['source'] = 'manager_digest';
 $ranked = $rewardService->rankAndReward($bundle['mods'], $budget, $context);
 
 usort($ranked, fn($a, $b) => ($b['reward'] ?? 0) <=> ($a['reward'] ?? 0));
