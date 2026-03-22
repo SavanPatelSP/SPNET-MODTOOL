@@ -49,13 +49,19 @@ class SettingsService
         $aiEnabled = !empty($aiDefaults['enabled']) ? 1 : 0;
         $aiDay = (int)($aiDefaults['day'] ?? 1);
         $aiHour = (int)($aiDefaults['hour'] ?? 9);
+
+        $retentionDefaults = $this->config['retention_alert_defaults'] ?? [];
+        $retentionEnabled = !empty($retentionDefaults['enabled']) ? 1 : 0;
+        $retentionDay = (int)($retentionDefaults['day'] ?? 2);
+        $retentionHour = (int)($retentionDefaults['hour'] ?? 10);
+        $retentionThreshold = (float)($retentionDefaults['threshold'] ?? 30);
         $approvals = $this->config['approvals'] ?? [];
         $approvalRequired = !empty($approvals['default_required']) ? 1 : 0;
 
         $this->db->exec(
-            'INSERT INTO settings (chat_id, reward_budget, timezone, active_gap_minutes, active_floor_minutes, auto_report_enabled, auto_report_day, auto_report_hour, progress_report_enabled, progress_report_day, progress_report_hour, weekly_summary_enabled, weekly_summary_weekday, weekly_summary_hour, inactivity_alert_enabled, inactivity_alert_days, inactivity_alert_hour, ai_review_enabled, ai_review_day, ai_review_hour, approval_required, updated_at)
-             VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [$chatId, $timezone, $gap, $floor, $autoEnabled, $autoDay, $autoHour, $progressEnabled, $progressDay, $progressHour, $weeklyEnabled, $weeklyWeekday, $weeklyHour, $inactiveEnabled, $inactiveDays, $inactiveHour, $aiEnabled, $aiDay, $aiHour, $approvalRequired, $this->nowUtc()]
+            'INSERT INTO settings (chat_id, reward_budget, timezone, active_gap_minutes, active_floor_minutes, auto_report_enabled, auto_report_day, auto_report_hour, progress_report_enabled, progress_report_day, progress_report_hour, weekly_summary_enabled, weekly_summary_weekday, weekly_summary_hour, inactivity_alert_enabled, inactivity_alert_days, inactivity_alert_hour, ai_review_enabled, ai_review_day, ai_review_hour, retention_alert_enabled, retention_alert_day, retention_alert_hour, retention_threshold, approval_required, updated_at)
+             VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [$chatId, $timezone, $gap, $floor, $autoEnabled, $autoDay, $autoHour, $progressEnabled, $progressDay, $progressHour, $weeklyEnabled, $weeklyWeekday, $weeklyHour, $inactiveEnabled, $inactiveDays, $inactiveHour, $aiEnabled, $aiDay, $aiHour, $retentionEnabled, $retentionDay, $retentionHour, $retentionThreshold, $approvalRequired, $this->nowUtc()]
         );
 
         return [
@@ -79,6 +85,10 @@ class SettingsService
             'ai_review_enabled' => $aiEnabled,
             'ai_review_day' => $aiDay,
             'ai_review_hour' => $aiHour,
+            'retention_alert_enabled' => $retentionEnabled,
+            'retention_alert_day' => $retentionDay,
+            'retention_alert_hour' => $retentionHour,
+            'retention_threshold' => $retentionThreshold,
             'approval_required' => $approvalRequired,
         ];
     }
@@ -238,6 +248,37 @@ class SettingsService
     {
         $this->db->exec(
             'UPDATE settings SET ai_review_last_month = ?, ai_review_last_sent_at = ?, updated_at = ? WHERE chat_id = ?',
+            [$month, $this->nowUtc(), $this->nowUtc(), $chatId]
+        );
+    }
+
+    public function updateRetentionAlert(int|string $chatId, bool $enabled, ?int $day, ?int $hour, ?float $threshold): void
+    {
+        $fields = ['retention_alert_enabled = ?', 'updated_at = ?'];
+        $params = [$enabled ? 1 : 0, $this->nowUtc()];
+
+        if ($day !== null) {
+            $fields[] = 'retention_alert_day = ?';
+            $params[] = $day;
+        }
+        if ($hour !== null) {
+            $fields[] = 'retention_alert_hour = ?';
+            $params[] = $hour;
+        }
+        if ($threshold !== null) {
+            $fields[] = 'retention_threshold = ?';
+            $params[] = $threshold;
+        }
+
+        $params[] = $chatId;
+        $sql = 'UPDATE settings SET ' . implode(', ', $fields) . ' WHERE chat_id = ?';
+        $this->db->exec($sql, $params);
+    }
+
+    public function updateRetentionAlertLast(int|string $chatId, string $month): void
+    {
+        $this->db->exec(
+            'UPDATE settings SET retention_alert_last_month = ?, retention_alert_last_sent_at = ?, updated_at = ? WHERE chat_id = ?',
             [$month, $this->nowUtc(), $this->nowUtc(), $chatId]
         );
     }

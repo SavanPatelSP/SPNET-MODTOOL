@@ -13,6 +13,7 @@ use App\Services\RewardHistoryService;
 use App\Services\CoachingService;
 use App\Services\HealthService;
 use App\Services\PerformanceReviewService;
+use App\Services\RetentionRiskService;
 use App\Services\RosterService;
 use App\Services\ArchiveService;
 use App\Services\ReportApprovalService;
@@ -42,6 +43,7 @@ class UpdateHandler
     private CoachingService $coaching;
     private HealthService $health;
     private PerformanceReviewService $performanceReview;
+    private RetentionRiskService $retentionRisk;
     private RosterService $roster;
     private ArchiveService $archive;
     private ReportApprovalService $approvals;
@@ -73,6 +75,7 @@ class UpdateHandler
         $this->coaching = new CoachingService($this->stats, $this->settings, $config);
         $this->health = new HealthService($this->stats, $this->settings, $config);
         $this->performanceReview = new PerformanceReviewService($this->stats, $this->settings, $config);
+        $this->retentionRisk = new RetentionRiskService($this->stats, $this->settings, $config);
         $this->roster = new RosterService($db);
         $this->rewardSheet = new RewardSheet($this->stats, $this->rewards, $config, $this->rewardContext, $this->rewardHistory, $this->archive, $this->approvals);
         $this->rewardCsv = new RewardCsv($this->stats, $this->rewards, $this->rewardContext, $this->rewardHistory, $this->archive);
@@ -233,7 +236,7 @@ class UpdateHandler
             'rosteradd', 'rosterremove', 'rosterlist', 'rosterrole',
             'premium', 'benefits', 'pricing', 'guide', 'giftplan', 'grantplan', 'approval', 'approvereport', 'approvalstatus', 'auditlogcsv',
             'buy_stars_test', 'buy_crypto_test', 'paystatus', 'debughours', 'debughoursall', 'finduser', 'autoweekly', 'autoinactive', 'activityrank',
-            'aireview', 'autoaireview',
+            'aireview', 'autoaireview', 'retention', 'autoretention',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
 
@@ -359,6 +362,12 @@ class UpdateHandler
                         return;
                     case 'aireview':
                         $this->handleAiReview($chatId, $targetChatId, $cleanArgs, $userId);
+                        return;
+                    case 'autoretention':
+                        $this->handleAutoRetention($chatId, $targetChatId, $cleanArgs, $userId);
+                        return;
+                    case 'retention':
+                        $this->handleRetentionAlert($chatId, $targetChatId, $cleanArgs, $userId);
                         return;
                     case 'progress':
                         $this->handleProgressReport($chatId, $targetChatId, $cleanArgs);
@@ -1821,6 +1830,7 @@ class UpdateHandler
             '- Executive summary + trend report + PDF export',
             '- Coaching tips + team health (coverage gaps, workload balance, burnout risk)',
             '- AI performance reviews per mod (monthly feedback summaries)',
+            '- Retention risk alerts (month-over-month drop detection)',
             '- Import wizard + source breakdown (Bot vs ChatKeeper/Combot)',
             '- Report archive + reward history',
             '- Owner notifications (auto report DM, mid-month progress, at-risk alerts, congrats)',
@@ -1859,6 +1869,7 @@ class UpdateHandler
             '- Reward upgrades (max-share cap, stability bonus, penalty decay)',
             '- Coaching tips + team health (coverage gaps, workload balance, burnout risk)',
             '- AI performance reviews per mod (monthly feedback summaries)',
+            '- Retention risk alerts (month-over-month drop detection)',
             '- Executive summary + trend report + PDF export',
             '- Import wizard (browser upload) + source breakdown',
             '- Report archive + reward history',
@@ -2710,6 +2721,128 @@ class UpdateHandler
         }
     }
 
+    private function handleAutoRetention(int|string $responseChatId, int|string $chatId, string $args, int|string $userId): void
+    {
+        if (!$this->isManager($userId)) {
+            $this->tg->sendMessage($responseChatId, 'Only bot managers or owners can change retention alerts.', ['parse_mode' => 'HTML']);
+            return;
+        }
+        if (!$this->requirePremium($chatId, $responseChatId)) {
+            return;
+        }
+
+        $parts = preg_split('/\s+/', trim($args));
+        $action = strtolower($parts[0] ?? 'status');
+        $settings = $this->settings->get($chatId);
+
+        if ($action === '' || $action === 'status') {
+            $status = !empty($settings['retention_alert_enabled']) ? 'ON' : 'OFF';
+            $day = (int)($settings['retention_alert_day'] ?? 2);
+            $hour = (int)($settings['retention_alert_hour'] ?? 10);
+            $threshold = (float)($settings['retention_threshold'] ?? 30);
+            $this->tg->sendMessage($responseChatId, 'Retention alerts: ' . $status . ' | Day ' . $day . ' at ' . $hour . ':00 | ' . number_format($threshold, 0) . '% drop.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        if ($action === 'on') {
+            $day = isset($parts[1]) ? (int)$parts[1] : null;
+            $hour = isset($parts[2]) ? (int)$parts[2] : null;
+            $threshold = isset($parts[3]) ? $this->parsePercent($parts[3]) : null;
+            if ($day !== null && ($day < 1 || $day > 28)) {
+                $this->tg->sendMessage($responseChatId, 'Day must be between 1 and 28.', ['parse_mode' => 'HTML']);
+                return;
+            }
+            if ($hour !== null && ($hour < 0 || $hour > 23)) {
+                $this->tg->sendMessage($responseChatId, 'Hour must be between 0 and 23.', ['parse_mode' => 'HTML']);
+                return;
+            }
+            if ($threshold !== null && ($threshold < 5 || $threshold > 90)) {
+                $this->tg->sendMessage($responseChatId, 'Threshold must be between 5 and 90.', ['parse_mode' => 'HTML']);
+                return;
+            }
+            $this->settings->updateRetentionAlert($chatId, true, $day, $hour, $threshold);
+            $this->tg->sendMessage($responseChatId, 'Retention alerts enabled.', ['parse_mode' => 'HTML']);
+            if ($this->shouldLog('log_commands')) {
+                Logger::infoContext('Retention alerts enabled', $this->logContextForChat($chatId, [
+                    'day' => $day,
+                    'hour' => $hour,
+                    'threshold' => $threshold,
+                ]));
+            }
+            return;
+        }
+
+        if ($action === 'off') {
+            $this->settings->updateRetentionAlert($chatId, false, null, null, null);
+            $this->tg->sendMessage($responseChatId, 'Retention alerts disabled.', ['parse_mode' => 'HTML']);
+            if ($this->shouldLog('log_commands')) {
+                Logger::infoContext('Retention alerts disabled', $this->logContextForChat($chatId));
+            }
+            return;
+        }
+
+        $this->tg->sendMessage($responseChatId, 'Usage: /autoretention on [day] [hour] [threshold%] [chat_id] | /autoretention off [chat_id] | /autoretention status [chat_id]', ['parse_mode' => 'HTML']);
+    }
+
+    private function handleRetentionAlert(int|string $responseChatId, int|string $chatId, string $args, int|string $userId): void
+    {
+        if (!$this->requirePremium($chatId, $responseChatId)) {
+            return;
+        }
+        if (!$this->isManager($userId)) {
+            $this->tg->sendMessage($responseChatId, 'Only bot managers or owners can send retention alerts.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $month = null;
+        $threshold = null;
+        $tokens = preg_split('/\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^\d{4}-\d{2}$/', $token)) {
+                $month = $token;
+                continue;
+            }
+            $parsed = $this->parsePercent($token);
+            if ($parsed !== null) {
+                $threshold = $parsed;
+            }
+        }
+
+        $report = $this->retentionRisk->buildReport($chatId, $month, $threshold);
+        if ($report['status'] === 'no_mods') {
+            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $chatRow = $this->db->fetch('SELECT title FROM chats WHERE id = ? LIMIT 1', [$chatId]);
+        $chatTitle = $chatRow['title'] ?? ('Chat ' . $chatId);
+        $lines = $this->retentionRisk->buildLines($report, $chatTitle);
+
+        $targets = $this->getManagerTargets();
+        if (empty($targets)) {
+            $this->tg->sendMessage($responseChatId, 'No managers configured in config.local.php (manager_user_ids).', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $this->sendChunkedMessageToTargets($targets, implode("\n", $lines));
+        if (!in_array((int)$responseChatId, $targets, true)) {
+            $this->tg->sendMessage($responseChatId, 'Retention alerts sent to managers.', ['parse_mode' => 'HTML']);
+        }
+
+        if ($this->shouldLog('log_reports')) {
+            Logger::infoContext(
+                'Retention alerts generated',
+                $this->logContextForChat($chatId, [
+                    'month' => $report['range']['month'] ?? null,
+                    'flagged' => $report['summary']['flagged'] ?? 0,
+                ])
+            );
+        }
+    }
+
     private function handleActivityRank(int|string $responseChatId, int|string $chatId, string $args, int|string $userId): void
     {
         if (!$this->isManager($userId)) {
@@ -3233,8 +3366,10 @@ class UpdateHandler
                 '/autoweekly on [weekday] [hour] [chat_id]',
                 '/autoinactive on [days] [hour] [chat_id]',
                 '/autoaireview on [day] [hour] [chat_id]',
+                '/autoretention on [day] [hour] [threshold%] [chat_id]',
                 '/activityrank [chat_id] [YYYY-MM] [top]',
                 '/aireview [chat_id] [YYYY-MM]',
+                '/retention [chat_id] [YYYY-MM] [threshold%]',
                 '/progress [chat_id] [budget]',
                 '/modadd [chat_id] &lt;@username|user_id&gt;',
                 '/modremove [chat_id] &lt;@username|user_id&gt;',
@@ -3308,6 +3443,7 @@ class UpdateHandler
             '<code>/finduser @alex</code>',
             '<code>/activityrank 2026-02 5</code>',
             '<code>/aireview 2026-02</code>',
+            '<code>/retention 2026-02 30%</code>',
             '',
             '<b>Leaderboards</b>',
             '<code>/leaderboard</code>',
@@ -3340,6 +3476,7 @@ class UpdateHandler
             '<code>/autoweekly on 1 10</code> (Mon 10:00)',
             '<code>/autoinactive on 7 10</code> (inactive 7d, 10:00)',
             '<code>/autoaireview on 1 9</code> (monthly AI review)',
+            '<code>/autoretention on 2 10 30%</code> (retention drop alerts)',
             '',
             '<b>Approvals + audit log</b>',
             '<code>/approval on</code>',
@@ -3409,6 +3546,18 @@ class UpdateHandler
                 $this->tg->sendMessage($targetId, $chunk, ['parse_mode' => 'HTML']);
             }
         }
+    }
+
+    private function parsePercent(string $token): ?float
+    {
+        $value = rtrim(trim($token), '%');
+        if ($value === '') {
+            return null;
+        }
+        if (!is_numeric($value)) {
+            return null;
+        }
+        return (float)$value;
     }
 
     private function formatStatsMessage(array $stat, array $range): string

@@ -212,6 +212,23 @@ return [
         'trend_bad' => -5,
     ],
 
+    // Retention risk alerts (month-over-month drop)
+    'retention_alert_defaults' => [
+        'enabled' => false,
+        'day' => 2,
+        'hour' => 10,
+        'threshold' => 30, // percent drop
+    ],
+    'retention_alert' => [
+        'min_prev_score' => 10,
+        'min_prev_messages' => 50,
+        'min_prev_active_hours' => 5,
+        'min_prev_actions' => 2,
+        'severity_high' => 50,
+        'severity_medium' => 35,
+        'severity_low' => 25,
+    ],
+
     // Report branding
     'report' => [
         'brand_name' => 'SP NET MOD TOOL',

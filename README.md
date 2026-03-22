@@ -69,11 +69,13 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
    - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/016_inactivity_alerts.sql`
 18. Run the AI review migration:
    - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/017_ai_review.sql`
-19. Copy config overrides:
+19. Run the retention alerts migration:
+   - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/018_retention_alerts.sql`
+20. Copy config overrides:
    - `cp /Users/savanpatel/Documents/SPNET-MODTOOL/config.example.php /Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php`
-20. Edit `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` with your bot token and DB creds.
+21. Edit `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` with your bot token and DB creds.
     - Optional: add `owner_user_ids` and `manager_user_ids` for staff access.
-21. Run in long-poll mode:
+22. Run in long-poll mode:
    - `php /Users/savanpatel/Documents/SPNET-MODTOOL/bin/poll.php`
 
 ## Commands
@@ -107,6 +109,7 @@ Private chat commands:
 - `/coach [YYYY-MM]` (premium)
 - `/health [YYYY-MM]` (premium)
 - `/aireview [YYYY-MM]` (premium AI performance review)
+- `/retention [YYYY-MM] [threshold%]` (premium retention risk alerts)
 - `/trend [YYYY-MM] [budget]` (premium)
 - `/execsummary [YYYY-MM] [budget]` (premium)
 - `/archive`
@@ -117,6 +120,8 @@ Private chat commands:
 - `/autoreport off [chat_id]`
 - `/autoaireview on [day] [hour] [chat_id]`
 - `/autoaireview off [chat_id]`
+- `/autoretention on [day] [hour] [threshold%] [chat_id]`
+- `/autoretention off [chat_id]`
 - `/autoreport status [chat_id]`
 - `/autoprogress on [day] [hour] [chat_id]`
 - `/autoprogress off [chat_id]`
@@ -208,6 +213,12 @@ Auto-generate per-mod feedback summaries:
 /aireview 2026-02
 ```
 
+### 7c) Retention risk alerts (premium)
+Identify mods with month-over-month drops:
+```text
+/retention 2026-02 30%
+```
+
 ### 8) Budget and scoring controls
 ```text
 /setbudget 8000
@@ -221,6 +232,7 @@ Enable monthly reports and mid-month progress:
 /autoreport on 1 9
 /autoprogress on 15 12
 /autoaireview on 1 9
+/autoretention on 2 10 30%
 ```
 The scheduler must run hourly:
 ```text

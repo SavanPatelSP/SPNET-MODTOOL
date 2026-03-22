@@ -13,6 +13,7 @@ use App\Services\ArchiveService;
 use App\Services\SubscriptionService;
 use App\Services\NotificationService;
 use App\Services\PerformanceReviewService;
+use App\Services\RetentionRiskService;
 use App\Reports\RewardSheet;
 use App\Logger;
 use App\Services\ChangelogService;
@@ -37,6 +38,7 @@ $archive = new ArchiveService($db);
 $subscriptions = new SubscriptionService($db, $config);
 $notifications = new NotificationService($db);
 $performanceReview = new PerformanceReviewService($statsService, $settingsService, $config);
+$retentionRisk = new RetentionRiskService($statsService, $settingsService, $config);
 $rewardSheet = new RewardSheet($statsService, $rewardService, $config, $rewardContext, $rewardHistory, $archive);
 
 function sendChunkedMessage(Telegram $tg, int|string $chatId, string $text, int $limit = 3500): void
@@ -79,9 +81,9 @@ $midMonthEnabled = (bool)($config['premium']['notifications']['mid_month_alert']
 $congratsEnabled = (bool)($config['premium']['notifications']['congrats'] ?? true);
 
 try {
-    $rows = $db->fetchAll('SELECT * FROM settings WHERE auto_report_enabled = 1 OR progress_report_enabled = 1 OR weekly_summary_enabled = 1 OR inactivity_alert_enabled = 1 OR ai_review_enabled = 1');
+    $rows = $db->fetchAll('SELECT * FROM settings WHERE auto_report_enabled = 1 OR progress_report_enabled = 1 OR weekly_summary_enabled = 1 OR inactivity_alert_enabled = 1 OR ai_review_enabled = 1 OR retention_alert_enabled = 1');
 } catch (Throwable $e) {
-    echo "Report columns missing. Run migrations/002_auto_reports.sql, migrations/006_progress_reports.sql, migrations/015_weekly_summary.sql, migrations/016_inactivity_alerts.sql, and migrations/017_ai_review.sql\n";
+    echo "Report columns missing. Run migrations/002_auto_reports.sql, migrations/006_progress_reports.sql, migrations/015_weekly_summary.sql, migrations/016_inactivity_alerts.sql, migrations/017_ai_review.sql, and migrations/018_retention_alerts.sql\n";
     exit(1);
 }
 
@@ -167,6 +169,41 @@ foreach ($rows as $row) {
                             }
                             $settingsService->updateAiReviewLast($chatId, $targetMonth);
                             Logger::info('AI review sent for chat ' . $chatId . ' month ' . $targetMonth);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (!empty($row['retention_alert_enabled'])) {
+        $day = (int)($row['retention_alert_day'] ?? 2);
+        $hour = (int)($row['retention_alert_hour'] ?? 10);
+
+        if ($currentDay >= $day && $currentHour >= $hour) {
+            $targetMonth = $nowLocal->modify('first day of last month')->format('Y-m');
+            if (empty($row['retention_alert_last_month']) || $row['retention_alert_last_month'] !== $targetMonth) {
+                if (!$isPremium) {
+                    Logger::info('Retention alerts skipped for chat ' . $chatId . ' (not premium)');
+                } else {
+                    $report = $retentionRisk->buildReport($chatId, $targetMonth, null);
+                    if (($report['status'] ?? '') === 'no_mods') {
+                        Logger::info('Retention alerts skipped for chat ' . $chatId . ' (no mods)');
+                    } else {
+                        $chatRow = $db->fetch('SELECT title FROM chats WHERE id = ? LIMIT 1', [$chatId]);
+                        $chatTitle = $chatRow['title'] ?? ('Chat ' . $chatId);
+                        $lines = $retentionRisk->buildLines($report, $chatTitle);
+                        $message = implode("\n", $lines);
+
+                        $targets = !empty($managerIds) ? $managerIds : $ownerIds;
+                        if (empty($targets)) {
+                            Logger::info('Retention alerts skipped for chat ' . $chatId . ' (no managers)');
+                        } else {
+                            foreach ($targets as $managerId) {
+                                sendChunkedMessage($tg, $managerId, $message);
+                            }
+                            $settingsService->updateRetentionAlertLast($chatId, $targetMonth);
+                            Logger::info('Retention alerts sent for chat ' . $chatId . ' month ' . $targetMonth);
                         }
                     }
                 }
