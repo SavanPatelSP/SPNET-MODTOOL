@@ -190,6 +190,13 @@ return [
         'hour' => 10,
     ],
 
+    // Inactivity alerts (managers DM)
+    'inactivity_alert_defaults' => [
+        'enabled' => false,
+        'days' => 7,
+        'hour' => 10,
+    ],
+
     // Report branding
     'report' => [
         'brand_name' => 'SP NET MOD TOOL',

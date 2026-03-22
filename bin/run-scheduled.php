@@ -46,9 +46,9 @@ $midMonthEnabled = (bool)($config['premium']['notifications']['mid_month_alert']
 $congratsEnabled = (bool)($config['premium']['notifications']['congrats'] ?? true);
 
 try {
-    $rows = $db->fetchAll('SELECT * FROM settings WHERE auto_report_enabled = 1 OR progress_report_enabled = 1 OR weekly_summary_enabled = 1');
+    $rows = $db->fetchAll('SELECT * FROM settings WHERE auto_report_enabled = 1 OR progress_report_enabled = 1 OR weekly_summary_enabled = 1 OR inactivity_alert_enabled = 1');
 } catch (Throwable $e) {
-    echo "Report columns missing. Run migrations/002_auto_reports.sql, migrations/006_progress_reports.sql, and migrations/015_weekly_summary.sql\n";
+    echo "Report columns missing. Run migrations/002_auto_reports.sql, migrations/006_progress_reports.sql, migrations/015_weekly_summary.sql, and migrations/016_inactivity_alerts.sql\n";
     exit(1);
 }
 
@@ -222,6 +222,72 @@ foreach ($rows as $row) {
                         }
                         $settingsService->updateWeeklySummaryLast($chatId, $weekKey);
                         Logger::info('Weekly summary sent for chat ' . $chatId . ' week ' . $weekKey);
+                    }
+                }
+            }
+        }
+    }
+
+    if (!empty($row['inactivity_alert_enabled'])) {
+        $days = (int)($row['inactivity_alert_days'] ?? 7);
+        $hour = (int)($row['inactivity_alert_hour'] ?? 10);
+
+        if ($currentHour >= $hour) {
+            $period = $nowLocal->format('Y-m-d');
+            if (!$notifications->wasSent($chatId, 'inactivity_alert', $period)) {
+                $startLocal = $nowLocal->modify('-' . max(1, $days) . ' days')->setTime(0, 0, 0);
+                $startUtc = $startLocal->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+
+                $mods = $db->fetchAll(
+                    'SELECT u.id as user_id, u.username, u.first_name, u.last_name
+                     FROM chat_members cm
+                     JOIN users u ON u.id = cm.user_id
+                     WHERE cm.chat_id = ? AND cm.is_mod = 1',
+                    [$chatId]
+                );
+
+                if (!empty($mods)) {
+                    $activeRows = $db->fetchAll(
+                        'SELECT DISTINCT user_id FROM messages WHERE chat_id = ? AND sent_at >= ?',
+                        [$chatId, $startUtc]
+                    );
+                    $activeMap = [];
+                    foreach ($activeRows as $activeRow) {
+                        $activeMap[(int)$activeRow['user_id']] = true;
+                    }
+
+                    $inactive = [];
+                    foreach ($mods as $mod) {
+                        if (!isset($activeMap[(int)$mod['user_id']])) {
+                            $inactive[] = $mod;
+                        }
+                    }
+
+                    if (!empty($inactive)) {
+                        $chatRow = $db->fetch('SELECT title FROM chats WHERE id = ? LIMIT 1', [$chatId]);
+                        $chatTitle = $chatRow['title'] ?? ('Chat ' . $chatId);
+
+                        $lines = [];
+                        $lines[] = '<b>Inactivity Alert</b>';
+                        $lines[] = $chatTitle . ' · No activity in last ' . $days . ' days';
+                        $lines[] = '';
+                        foreach (array_slice($inactive, 0, 15) as $mod) {
+                            $name = $mod['username'] ? '@' . $mod['username'] : trim(($mod['first_name'] ?? '') . ' ' . ($mod['last_name'] ?? ''));
+                            if ($name === '') {
+                                $name = 'User ' . $mod['user_id'];
+                            }
+                            $lines[] = '• ' . htmlspecialchars($name, ENT_QUOTES, 'UTF-8');
+                        }
+
+                        $targets = !empty($managerIds) ? $managerIds : $ownerIds;
+                        if (!empty($targets)) {
+                            $message = implode("\n", $lines);
+                            foreach ($targets as $managerId) {
+                                $tg->sendMessage($managerId, $message, ['parse_mode' => 'HTML']);
+                            }
+                            $notifications->markSent($chatId, 'inactivity_alert', $period);
+                            Logger::info('Inactivity alert sent for chat ' . $chatId . ' date ' . $period);
+                        }
                     }
                 }
             }

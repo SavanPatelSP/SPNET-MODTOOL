@@ -229,7 +229,7 @@ class UpdateHandler
             'plan', 'setplan', 'coach', 'health', 'trend', 'execsummary', 'archive',
             'rosteradd', 'rosterremove', 'rosterlist', 'rosterrole',
             'premium', 'benefits', 'pricing', 'guide', 'giftplan', 'grantplan', 'approval', 'approvereport', 'approvalstatus', 'auditlogcsv',
-            'buy_stars_test', 'buy_crypto_test', 'paystatus', 'debughours', 'debughoursall', 'finduser', 'autoweekly',
+            'buy_stars_test', 'buy_crypto_test', 'paystatus', 'debughours', 'debughoursall', 'finduser', 'autoweekly', 'autoinactive',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
 
@@ -343,6 +343,9 @@ class UpdateHandler
                         return;
                     case 'autoweekly':
                         $this->handleAutoWeekly($chatId, $targetChatId, $cleanArgs);
+                        return;
+                    case 'autoinactive':
+                        $this->handleAutoInactive($chatId, $targetChatId, $cleanArgs);
                         return;
                     case 'progress':
                         $this->handleProgressReport($chatId, $targetChatId, $cleanArgs);
@@ -2534,6 +2537,54 @@ class UpdateHandler
         $this->tg->sendMessage($responseChatId, 'Usage: /autoweekly on [weekday] [hour] [chat_id] | /autoweekly off [chat_id] | /autoweekly status [chat_id]', ['parse_mode' => 'HTML']);
     }
 
+    private function handleAutoInactive(int|string $responseChatId, int|string $chatId, string $args): void
+    {
+        $parts = preg_split('/\s+/', trim($args));
+        $action = strtolower($parts[0] ?? '');
+
+        if ($action === 'status' || $action === '') {
+            $settings = $this->settings->get($chatId);
+            $status = !empty($settings['inactivity_alert_enabled']) ? 'ON' : 'OFF';
+            $days = (int)($settings['inactivity_alert_days'] ?? 7);
+            $hour = (int)($settings['inactivity_alert_hour'] ?? 10);
+            $this->tg->sendMessage($responseChatId, 'Inactivity alerts: ' . $status . ' | ' . $days . 'd at ' . $hour . ':00.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        if ($action === 'on') {
+            $days = isset($parts[1]) ? (int)$parts[1] : null;
+            $hour = isset($parts[2]) ? (int)$parts[2] : null;
+            if ($days !== null && $days < 1) {
+                $this->tg->sendMessage($responseChatId, 'Days must be 1 or more.', ['parse_mode' => 'HTML']);
+                return;
+            }
+            if ($hour !== null && ($hour < 0 || $hour > 23)) {
+                $this->tg->sendMessage($responseChatId, 'Hour must be between 0 and 23.', ['parse_mode' => 'HTML']);
+                return;
+            }
+            $this->settings->updateInactivityAlert($chatId, true, $days, $hour);
+            $this->tg->sendMessage($responseChatId, 'Inactivity alerts enabled.', ['parse_mode' => 'HTML']);
+            if ($this->shouldLog('log_commands')) {
+                Logger::infoContext('Inactivity alerts enabled', $this->logContextForChat($chatId, [
+                    'days' => $days,
+                    'hour' => $hour,
+                ]));
+            }
+            return;
+        }
+
+        if ($action === 'off') {
+            $this->settings->updateInactivityAlert($chatId, false, null, null);
+            $this->tg->sendMessage($responseChatId, 'Inactivity alerts disabled.', ['parse_mode' => 'HTML']);
+            if ($this->shouldLog('log_commands')) {
+                Logger::infoContext('Inactivity alerts disabled', $this->logContextForChat($chatId));
+            }
+            return;
+        }
+
+        $this->tg->sendMessage($responseChatId, 'Usage: /autoinactive on [days] [hour] [chat_id] | /autoinactive off [chat_id] | /autoinactive status [chat_id]', ['parse_mode' => 'HTML']);
+    }
+
     private function handleProgressReport(int|string $responseChatId, int|string $chatId, string $args): void
     {
         $budget = null;
@@ -2930,6 +2981,7 @@ class UpdateHandler
                 '/autoreport on [day] [hour] [chat_id]',
                 '/autoprogress on [day] [hour] [chat_id]',
                 '/autoweekly on [weekday] [hour] [chat_id]',
+                '/autoinactive on [days] [hour] [chat_id]',
                 '/progress [chat_id] [budget]',
                 '/modadd [chat_id] &lt;@username|user_id&gt;',
                 '/modremove [chat_id] &lt;@username|user_id&gt;',
@@ -3031,6 +3083,7 @@ class UpdateHandler
             '<code>/autoreport on 1 9</code>',
             '<code>/autoprogress on 15 12</code>',
             '<code>/autoweekly on 1 10</code> (Mon 10:00)',
+            '<code>/autoinactive on 7 10</code> (inactive 7d, 10:00)',
             '',
             '<b>Approvals + audit log</b>',
             '<code>/approval on</code>',

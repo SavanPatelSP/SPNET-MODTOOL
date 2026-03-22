@@ -39,13 +39,18 @@ class SettingsService
         $weeklyEnabled = !empty($weeklyDefaults['enabled']) ? 1 : 0;
         $weeklyWeekday = (int)($weeklyDefaults['weekday'] ?? 1);
         $weeklyHour = (int)($weeklyDefaults['hour'] ?? 10);
+
+        $inactiveDefaults = $this->config['inactivity_alert_defaults'] ?? [];
+        $inactiveEnabled = !empty($inactiveDefaults['enabled']) ? 1 : 0;
+        $inactiveDays = (int)($inactiveDefaults['days'] ?? 7);
+        $inactiveHour = (int)($inactiveDefaults['hour'] ?? 10);
         $approvals = $this->config['approvals'] ?? [];
         $approvalRequired = !empty($approvals['default_required']) ? 1 : 0;
 
         $this->db->exec(
-            'INSERT INTO settings (chat_id, reward_budget, timezone, active_gap_minutes, active_floor_minutes, auto_report_enabled, auto_report_day, auto_report_hour, progress_report_enabled, progress_report_day, progress_report_hour, weekly_summary_enabled, weekly_summary_weekday, weekly_summary_hour, approval_required, updated_at)
-             VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [$chatId, $timezone, $gap, $floor, $autoEnabled, $autoDay, $autoHour, $progressEnabled, $progressDay, $progressHour, $weeklyEnabled, $weeklyWeekday, $weeklyHour, $approvalRequired, $this->nowUtc()]
+            'INSERT INTO settings (chat_id, reward_budget, timezone, active_gap_minutes, active_floor_minutes, auto_report_enabled, auto_report_day, auto_report_hour, progress_report_enabled, progress_report_day, progress_report_hour, weekly_summary_enabled, weekly_summary_weekday, weekly_summary_hour, inactivity_alert_enabled, inactivity_alert_days, inactivity_alert_hour, approval_required, updated_at)
+             VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [$chatId, $timezone, $gap, $floor, $autoEnabled, $autoDay, $autoHour, $progressEnabled, $progressDay, $progressHour, $weeklyEnabled, $weeklyWeekday, $weeklyHour, $inactiveEnabled, $inactiveDays, $inactiveHour, $approvalRequired, $this->nowUtc()]
         );
 
         return [
@@ -63,6 +68,9 @@ class SettingsService
             'weekly_summary_enabled' => $weeklyEnabled,
             'weekly_summary_weekday' => $weeklyWeekday,
             'weekly_summary_hour' => $weeklyHour,
+            'inactivity_alert_enabled' => $inactiveEnabled,
+            'inactivity_alert_days' => $inactiveDays,
+            'inactivity_alert_hour' => $inactiveHour,
             'approval_required' => $approvalRequired,
         ];
     }
@@ -178,6 +186,25 @@ class SettingsService
             'UPDATE settings SET weekly_summary_last_week = ?, weekly_summary_last_sent_at = ?, updated_at = ? WHERE chat_id = ?',
             [$weekKey, $this->nowUtc(), $this->nowUtc(), $chatId]
         );
+    }
+
+    public function updateInactivityAlert(int|string $chatId, bool $enabled, ?int $days, ?int $hour): void
+    {
+        $fields = ['inactivity_alert_enabled = ?', 'updated_at = ?'];
+        $params = [$enabled ? 1 : 0, $this->nowUtc()];
+
+        if ($days !== null) {
+            $fields[] = 'inactivity_alert_days = ?';
+            $params[] = $days;
+        }
+        if ($hour !== null) {
+            $fields[] = 'inactivity_alert_hour = ?';
+            $params[] = $hour;
+        }
+
+        $params[] = $chatId;
+        $sql = 'UPDATE settings SET ' . implode(', ', $fields) . ' WHERE chat_id = ?';
+        $this->db->exec($sql, $params);
     }
 
     private function nowUtc(): string
