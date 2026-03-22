@@ -24,6 +24,7 @@ use App\Reports\RewardCsv;
 use App\Reports\MultiChatReport;
 use App\Reports\ExecutiveSummary;
 use App\Reports\TrendReport;
+use App\Reports\TimesheetCsv;
 use App\Logger;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -54,6 +55,7 @@ class UpdateHandler
     private MultiChatReport $multiChatReport;
     private ExecutiveSummary $executiveSummary;
     private TrendReport $trendReport;
+    private TimesheetCsv $timesheetCsv;
     private GoogleSheetsService $googleSheets;
 
     public function __construct(Database $db, Telegram $tg, array $config)
@@ -82,6 +84,7 @@ class UpdateHandler
         $this->multiChatReport = new MultiChatReport($this->stats, $this->rewards, $config);
         $this->executiveSummary = new ExecutiveSummary($this->stats, $this->rewards, $config, $this->rewardContext, $this->archive);
         $this->trendReport = new TrendReport($this->stats, $this->rewards, $config, $this->rewardContext, $this->archive);
+        $this->timesheetCsv = new TimesheetCsv($this->stats);
         $this->googleSheets = new GoogleSheetsService($config);
     }
 
@@ -236,7 +239,7 @@ class UpdateHandler
             'rosteradd', 'rosterremove', 'rosterlist', 'rosterrole',
             'premium', 'benefits', 'pricing', 'guide', 'giftplan', 'grantplan', 'approval', 'approvereport', 'approvalstatus', 'auditlogcsv',
             'buy_stars_test', 'buy_crypto_test', 'paystatus', 'debughours', 'debughoursall', 'finduser', 'autoweekly', 'autoinactive', 'activityrank',
-            'aireview', 'autoaireview', 'retention', 'autoretention',
+            'aireview', 'autoaireview', 'retention', 'autoretention', 'timesheet', 'compare',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
 
@@ -377,6 +380,12 @@ class UpdateHandler
                         return;
                     case 'debughoursall':
                         $this->handleDebugHoursAll($chatId, $targetChatId, $cleanArgs);
+                        return;
+                    case 'timesheet':
+                        $this->handleTimesheet($chatId, $targetChatId, $message, $cleanArgs);
+                        return;
+                    case 'compare':
+                        $this->handleCompare($chatId, $targetChatId, $message, $cleanArgs);
                         return;
                     case 'finduser':
                         $this->handleFindUser($chatId, $targetChatId, $cleanArgs);
@@ -620,6 +629,194 @@ class UpdateHandler
             return;
         }
         $this->tg->sendMessage($responseChatId, $text, ['parse_mode' => 'HTML']);
+    }
+
+    private function handleTimesheet(int|string $responseChatId, int|string $chatId, array $message, string $args): void
+    {
+        $targetUserId = $message['from']['id'] ?? null;
+        $targetUsername = $message['from']['username'] ?? null;
+        $explicitUser = false;
+        $dates = [];
+
+        if (isset($message['reply_to_message']['from'])) {
+            $targetUserId = $message['reply_to_message']['from']['id'] ?? null;
+            $targetUsername = $message['reply_to_message']['from']['username'] ?? null;
+            $explicitUser = true;
+        }
+
+        $tokens = preg_split('/\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $token)) {
+                $dates[] = $token;
+                continue;
+            }
+            if (strpos($token, '@') === 0) {
+                $targetUsername = substr($token, 1);
+                $targetUserId = null;
+                $explicitUser = true;
+                continue;
+            }
+            if (is_numeric($token)) {
+                $targetUserId = (int)$token;
+                $targetUsername = null;
+                $explicitUser = true;
+            }
+        }
+
+        if ($targetUserId === null && $targetUsername === null) {
+            $this->tg->sendMessage($responseChatId, 'Usage: /timesheet &lt;@username|user_id&gt; [YYYY-MM-DD] [YYYY-MM-DD] [chat_id]', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $settings = $this->settings->get($chatId);
+        $timezone = $settings['timezone'] ?? ($this->config['timezone'] ?? 'UTC');
+        $tz = new DateTimeZone($timezone);
+
+        $startLocal = null;
+        $endLocal = null;
+        if (count($dates) >= 2) {
+            $startLocal = DateTimeImmutable::createFromFormat('Y-m-d', $dates[0], $tz);
+            $endLocal = DateTimeImmutable::createFromFormat('Y-m-d', $dates[1], $tz);
+        } elseif (count($dates) === 1) {
+            $startLocal = DateTimeImmutable::createFromFormat('Y-m-d', $dates[0], $tz);
+            $endLocal = $startLocal;
+        } else {
+            $now = new DateTimeImmutable('now', $tz);
+            $startLocal = DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $now->format('Y-m-01 00:00:00'), $tz);
+            $endLocal = $now;
+        }
+
+        if (!$startLocal || !$endLocal) {
+            $this->tg->sendMessage($responseChatId, 'Invalid date format. Use YYYY-MM-DD.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $userRow = $this->findChatUser($chatId, $targetUserId, $targetUsername);
+        if (!$userRow) {
+            $this->tg->sendMessage($responseChatId, 'Mod not found in this chat. Use /finduser to locate.', ['parse_mode' => 'HTML']);
+            return;
+        }
+        if (empty($userRow['is_mod'])) {
+            $this->tg->sendMessage($responseChatId, 'That user is not a mod in this chat.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $filePath = $this->timesheetCsv->generate($chatId, (int)$userRow['id'], $this->displayName($userRow), $startLocal, $endLocal);
+        $caption = 'Timesheet for ' . $this->displayName($userRow) . ' · ' . $startLocal->format('Y-m-d') . ' to ' . $endLocal->format('Y-m-d') . ' (' . $timezone . ')';
+        $this->tg->sendDocument($responseChatId, $filePath, $caption);
+        if (!$explicitUser && $this->shouldLog('log_commands')) {
+            Logger::infoContext('Timesheet generated (self)', $this->logContextForChat($chatId, [
+                'user_id' => $userRow['id'] ?? null,
+            ]));
+        } elseif ($this->shouldLog('log_reports')) {
+            Logger::infoContext('Timesheet generated', $this->logContextForChat($chatId, [
+                'user_id' => $userRow['id'] ?? null,
+                'from' => $startLocal->format('Y-m-d'),
+                'to' => $endLocal->format('Y-m-d'),
+            ]));
+        }
+    }
+
+    private function handleCompare(int|string $responseChatId, int|string $chatId, array $message, string $args): void
+    {
+        $userTokens = [];
+        $month = null;
+        $userAId = null;
+        $userAUsername = null;
+
+        if (isset($message['reply_to_message']['from'])) {
+            $userAId = $message['reply_to_message']['from']['id'] ?? null;
+            $userAUsername = $message['reply_to_message']['from']['username'] ?? null;
+        }
+
+        $tokens = preg_split('/\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^\d{4}-\d{2}$/', $token)) {
+                $month = $token;
+                continue;
+            }
+            if (strpos($token, '@') === 0) {
+                $userTokens[] = ['username' => substr($token, 1)];
+                continue;
+            }
+            if (is_numeric($token)) {
+                $userTokens[] = ['id' => (int)$token];
+            }
+        }
+
+        if ($userAId === null && $userAUsername === null) {
+            $first = array_shift($userTokens);
+            if ($first) {
+                $userAId = $first['id'] ?? null;
+                $userAUsername = $first['username'] ?? null;
+            }
+        }
+
+        $second = array_shift($userTokens);
+        $userBId = $second['id'] ?? null;
+        $userBUsername = $second['username'] ?? null;
+
+        if (($userAId === null && $userAUsername === null) || ($userBId === null && $userBUsername === null)) {
+            $this->tg->sendMessage($responseChatId, 'Usage: /compare &lt;@user1|id1&gt; &lt;@user2|id2&gt; [YYYY-MM] [chat_id]', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $stats = $this->stats->getMonthlyStats($chatId, $month);
+        if (empty($stats['mods'])) {
+            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $modA = $this->findModInStats($stats['mods'], $userAId, $userAUsername);
+        $modB = $this->findModInStats($stats['mods'], $userBId, $userBUsername);
+
+        if (!$modA || !$modB) {
+            $this->tg->sendMessage($responseChatId, 'One or both mods not found in this chat.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $rankMap = [];
+        foreach ($stats['mods'] as $idx => $mod) {
+            $rankMap[(int)$mod['user_id']] = $idx + 1;
+        }
+        $rankA = $rankMap[(int)$modA['user_id']] ?? null;
+        $rankB = $rankMap[(int)$modB['user_id']] ?? null;
+
+        $chatRow = $this->db->fetch('SELECT title FROM chats WHERE id = ? LIMIT 1', [$chatId]);
+        $chatTitle = $chatRow['title'] ?? ('Chat ' . $chatId);
+
+        $lines = [];
+        $lines[] = '<b>Mod Comparison</b>';
+        $lines[] = $this->escape($chatTitle) . ' · ' . $this->escape($stats['range']['label'] ?? '');
+        $lines[] = '';
+        $lines[] = $this->escape($modA['display_name']) . ' vs ' . $this->escape($modB['display_name']);
+        $lines[] = 'Rank: #' . ($rankA ?? '-') . ' vs #' . ($rankB ?? '-');
+        $lines[] = 'Score: ' . number_format((float)$modA['score'], 2) . ' vs ' . number_format((float)$modB['score'], 2);
+        $lines[] = 'Impact: ' . number_format((float)($modA['impact_score'] ?? 0), 2) . ' vs ' . number_format((float)($modB['impact_score'] ?? 0), 2);
+        $lines[] = 'Consistency: ' . number_format((float)($modA['consistency_index'] ?? 0), 1) . '% vs ' . number_format((float)($modB['consistency_index'] ?? 0), 1) . '%';
+        $lines[] = 'Messages: ' . number_format((int)$modA['messages']) . ' vs ' . number_format((int)$modB['messages']);
+        $lines[] = 'Active hours: ' . number_format(((float)($modA['active_minutes'] ?? 0)) / 60, 1) . 'h vs ' . number_format(((float)($modB['active_minutes'] ?? 0)) / 60, 1) . 'h';
+        $lines[] = 'Presence hours: ' . number_format(((float)($modA['membership_minutes'] ?? 0)) / 60, 1) . 'h vs ' . number_format(((float)($modB['membership_minutes'] ?? 0)) / 60, 1) . 'h';
+        $lines[] = 'Days active: ' . number_format((int)$modA['days_active']) . ' vs ' . number_format((int)$modB['days_active']);
+        $lines[] = 'Actions (W/M/B): ' . (int)($modA['warnings'] ?? 0) . '/' . (int)($modA['mutes'] ?? 0) . '/' . (int)($modA['bans'] ?? 0) . ' vs ' . (int)($modB['warnings'] ?? 0) . '/' . (int)($modB['mutes'] ?? 0) . '/' . (int)($modB['bans'] ?? 0);
+
+        $impA = $modA['improvement'] ?? null;
+        $impB = $modB['improvement'] ?? null;
+        $trendA = $modA['trend_3m'] ?? null;
+        $trendB = $modB['trend_3m'] ?? null;
+        $lines[] = 'Improvement: ' . ($impA !== null ? number_format((float)$impA, 1) . '%' : 'N/A') . ' vs ' . ($impB !== null ? number_format((float)$impB, 1) . '%' : 'N/A');
+        if ($trendA !== null || $trendB !== null) {
+            $lines[] = '3‑month trend: ' . ($trendA !== null ? (($trendA >= 0 ? '+' : '') . number_format((float)$trendA, 1) . '%') : 'N/A') .
+                ' vs ' . ($trendB !== null ? (($trendB >= 0 ? '+' : '') . number_format((float)$trendB, 1) . '%') : 'N/A');
+        }
+
+        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
     }
 
     private function handleFindUser(int|string $responseChatId, int|string $chatId, string $args): void
@@ -3335,6 +3532,8 @@ class UpdateHandler
                 '/guide (full usage guide with examples)',
                 '/stats [chat_id] [YYYY-MM] [@user]',
                 '/finduser &lt;name|@username|user_id&gt; [chat_id]',
+                '/timesheet &lt;@username|user_id&gt; [YYYY-MM-DD] [YYYY-MM-DD] [chat_id]',
+                '/compare &lt;@user1|id1&gt; &lt;@user2|id2&gt; [YYYY-MM] [chat_id]',
                 '/leaderboard [chat_id] [YYYY-MM] [budget]',
                 '/report [chat_id] [YYYY-MM] [budget]',
                 '/reportcsv [chat_id] [YYYY-MM] [budget]',
@@ -3441,6 +3640,8 @@ class UpdateHandler
             '<code>/stats &lt;chat_id&gt; 2026-02 @alex</code>',
             '<code>/finduser alex</code>',
             '<code>/finduser @alex</code>',
+            '<code>/timesheet @alex 2026-02-01 2026-02-28</code>',
+            '<code>/compare @alex @maria 2026-02</code>',
             '<code>/activityrank 2026-02 5</code>',
             '<code>/aireview 2026-02</code>',
             '<code>/retention 2026-02 30%</code>',
@@ -3546,6 +3747,49 @@ class UpdateHandler
                 $this->tg->sendMessage($targetId, $chunk, ['parse_mode' => 'HTML']);
             }
         }
+    }
+
+    private function findChatUser(int|string $chatId, ?int $userId, ?string $username): ?array
+    {
+        if ($userId !== null) {
+            $row = $this->db->fetch(
+                'SELECT u.id, u.username, u.first_name, u.last_name, cm.is_mod
+                 FROM chat_members cm
+                 JOIN users u ON u.id = cm.user_id
+                 WHERE cm.chat_id = ? AND u.id = ? LIMIT 1',
+                [$chatId, (int)$userId]
+            );
+            if ($row) {
+                return $row;
+            }
+        }
+        if ($username !== null && $username !== '') {
+            $name = ltrim($username, '@');
+            $row = $this->db->fetch(
+                'SELECT u.id, u.username, u.first_name, u.last_name, cm.is_mod
+                 FROM chat_members cm
+                 JOIN users u ON u.id = cm.user_id
+                 WHERE cm.chat_id = ? AND LOWER(u.username) = LOWER(?) LIMIT 1',
+                [$chatId, $name]
+            );
+            if ($row) {
+                return $row;
+            }
+        }
+        return null;
+    }
+
+    private function findModInStats(array $mods, ?int $userId, ?string $username): ?array
+    {
+        foreach ($mods as $mod) {
+            if ($userId !== null && (int)$mod['user_id'] === (int)$userId) {
+                return $mod;
+            }
+            if ($username !== null && !empty($mod['username']) && strcasecmp($mod['username'], ltrim($username, '@')) === 0) {
+                return $mod;
+            }
+        }
+        return null;
     }
 
     private function parsePercent(string $token): ?float

@@ -249,6 +249,89 @@ class StatsService
         ];
     }
 
+    public function getTimesheet(int|string $chatId, int|string $userId, DateTimeImmutable $startLocal, DateTimeImmutable $endLocal): array
+    {
+        $settings = $this->settings->get($chatId);
+        $timezone = $settings['timezone'] ?? ($this->config['timezone'] ?? 'UTC');
+        $tz = new DateTimeZone($timezone);
+        $gap = (int)($settings['active_gap_minutes'] ?? $this->config['active_gap_minutes'] ?? 5);
+        $floor = (int)($settings['active_floor_minutes'] ?? $this->config['active_floor_minutes'] ?? 1);
+
+        $startLocal = $startLocal->setTimezone($tz)->setTime(0, 0, 0);
+        $endLocal = $endLocal->setTimezone($tz)->setTime(0, 0, 0);
+        if ($endLocal < $startLocal) {
+            [$startLocal, $endLocal] = [$endLocal, $startLocal];
+        }
+        $endExclusiveLocal = $endLocal->modify('+1 day');
+
+        $startUtc = $startLocal->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+        $endUtc = $endExclusiveLocal->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+
+        $rows = $this->db->fetchAll(
+            'SELECT sent_at FROM messages WHERE chat_id = ? AND user_id = ? AND sent_at >= ? AND sent_at < ? ORDER BY sent_at ASC',
+            [$chatId, $userId, $startUtc, $endUtc]
+        );
+
+        $timestampsByDate = [];
+        foreach ($rows as $row) {
+            $dt = new DateTimeImmutable($row['sent_at'], new DateTimeZone('UTC'));
+            $dtLocal = $dt->setTimezone($tz);
+            $dateKey = $dtLocal->format('Y-m-d');
+            $timestampsByDate[$dateKey][] = $dt->getTimestamp();
+        }
+
+        $memberships = $this->db->fetchAll(
+            'SELECT joined_at, left_at FROM memberships WHERE chat_id = ? AND user_id = ? AND joined_at < ? AND (left_at IS NULL OR left_at > ?)',
+            [$chatId, $userId, $endUtc, $startUtc]
+        );
+
+        $days = [];
+        $cursor = $startLocal;
+        while ($cursor < $endExclusiveLocal) {
+            $key = $cursor->format('Y-m-d');
+            $timestamps = $timestampsByDate[$key] ?? [];
+            $messageCount = count($timestamps);
+            $activeMinutes = $this->computeActiveMinutes($timestamps, $gap, $floor);
+            $presenceMinutes = $this->computeMembershipMinutesForDay($memberships, $cursor, $cursor->modify('+1 day'));
+
+            $days[] = [
+                'date' => $key,
+                'messages' => $messageCount,
+                'active_minutes' => $activeMinutes,
+                'presence_minutes' => $presenceMinutes,
+            ];
+            $cursor = $cursor->modify('+1 day');
+        }
+
+        $totalMessages = 0;
+        $totalActive = 0.0;
+        $totalPresence = 0.0;
+        foreach ($days as $day) {
+            $totalMessages += (int)$day['messages'];
+            $totalActive += (float)$day['active_minutes'];
+            $totalPresence += (float)$day['presence_minutes'];
+        }
+
+        $label = $startLocal->format('Y-m-d') . ' to ' . $endLocal->format('Y-m-d');
+
+        return [
+            'timezone' => $timezone,
+            'range' => [
+                'start_local' => $startLocal,
+                'end_local' => $endLocal,
+                'label' => $label,
+            ],
+            'gap_minutes' => $gap,
+            'floor_minutes' => $floor,
+            'days' => $days,
+            'totals' => [
+                'messages' => $totalMessages,
+                'active_minutes' => $totalActive,
+                'presence_minutes' => $totalPresence,
+            ],
+        ];
+    }
+
     public function getMonthToDateStats(int|string $chatId, ?DateTimeImmutable $nowLocal = null): array
     {
         $settings = $this->settings->get($chatId);
@@ -708,6 +791,31 @@ class StatsService
         }
 
         return round($total, 2);
+    }
+
+    private function computeMembershipMinutesForDay(array $rows, DateTimeImmutable $dayStartLocal, DateTimeImmutable $dayEndLocal): float
+    {
+        if (empty($rows)) {
+            return 0.0;
+        }
+
+        $dayStartUtc = $dayStartLocal->setTimezone(new DateTimeZone('UTC'));
+        $dayEndUtc = $dayEndLocal->setTimezone(new DateTimeZone('UTC'));
+        $dayStartTs = $dayStartUtc->getTimestamp();
+        $dayEndTs = $dayEndUtc->getTimestamp();
+        $minutes = 0.0;
+
+        foreach ($rows as $row) {
+            $joined = new DateTimeImmutable($row['joined_at'], new DateTimeZone('UTC'));
+            $left = $row['left_at'] ? new DateTimeImmutable($row['left_at'], new DateTimeZone('UTC')) : null;
+            $startTs = max($joined->getTimestamp(), $dayStartTs);
+            $endTs = $left ? min($left->getTimestamp(), $dayEndTs) : $dayEndTs;
+            if ($endTs > $startTs) {
+                $minutes += ($endTs - $startTs) / 60;
+            }
+        }
+
+        return round($minutes, 2);
     }
 
     private function computeImpactScore(array $metrics, array $weights): float

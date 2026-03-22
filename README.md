@@ -88,6 +88,8 @@ Private chat commands:
 - `/usechat <chat_id>` (or `/usechat <title>` or `/usechat off`)
 - `/guide` (full usage guide with examples)
 - `/stats [chat_id] [YYYY-MM] [@user]`
+- `/timesheet <@username|user_id> [YYYY-MM-DD] [YYYY-MM-DD] [chat_id]`
+- `/compare <@user1|id1> <@user2|id2> [YYYY-MM] [chat_id]`
 - `/leaderboard [chat_id] [YYYY-MM] [budget]`
 - `/report [chat_id] [YYYY-MM] [budget]`
 - `/reportcsv [chat_id] [YYYY-MM] [budget]`
@@ -172,6 +174,8 @@ Tip: You can forward a user message to the bot in private chat and reply with `/
 /stats
 /stats 2026-02
 /stats @alex
+/timesheet @alex 2026-02-01 2026-02-28
+/compare @alex @maria 2026-02
 /leaderboard
 /leaderboard 2026-02
 ```
