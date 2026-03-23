@@ -4040,6 +4040,7 @@ class UpdateHandler
             '<code>/retention 2026-02 30%</code>',
             '<code>/weeklysummary 7</code>',
             'Weekly summary DMs include a one-line TL;DR with quick summary + top risk + top reward.',
+            'Weekly summary includes performance badges (Top Helper, Most Balanced, Consistency King, Fast Responder).',
             '',
             '<b>Leaderboards</b>',
             '<code>/leaderboard</code>',
