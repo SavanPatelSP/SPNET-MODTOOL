@@ -18,6 +18,9 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
 - Bonus split planner (badge/role bonus pools)
 - Conflict/spam risk detector (aggressive moderation vs new users)
 - Burnout risk alerts (high hours + dropping quality/consistency)
+- Personal mod dashboard (self stats, badges, feedback)
+- Daily micro-feedback (private mod tips)
+- Goal tracker (monthly goals + progress)
 - Role multipliers for senior/lead moderators
 - Insights: most active, most improved, most consistent, peak hour
 - Test payments (Telegram Stars / crypto)
@@ -86,11 +89,13 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
    - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/018_retention_alerts.sql`
 20. Run the inactivity spike alerts migration:
    - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/019_inactivity_spikes.sql`
-21. Copy config overrides:
+21. Run the goals + daily feedback migration:
+   - `mysql -u root -p < /Users/savanpatel/Documents/SPNET-MODTOOL/migrations/020_goals_and_feedback.sql`
+22. Copy config overrides:
    - `cp /Users/savanpatel/Documents/SPNET-MODTOOL/config.example.php /Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php`
-22. Edit `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` with your bot token and DB creds.
+23. Edit `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` with your bot token and DB creds.
     - Optional: add `owner_user_ids` and `manager_user_ids` for staff access.
-23. Run in long-poll mode:
+24. Run in long-poll mode:
    - `php /Users/savanpatel/Documents/SPNET-MODTOOL/bin/poll.php`
 
 ## Commands
@@ -102,6 +107,10 @@ Private chat commands:
 - `/mychats` – list your group chat IDs
 - `/usechat <chat_id>` (or `/usechat <title>` or `/usechat off`)
 - `/guide` (full usage guide with examples)
+- `/mydashboard [YYYY-MM]` (personal mod dashboard)
+- `/goalset <metric> <value> [YYYY-MM]` (set monthly goal)
+- `/goalstatus [YYYY-MM]`
+- `/goalclear [YYYY-MM]`
 - `/stats [chat_id] [YYYY-MM] [@user]`
 - `/timesheet <@username|user_id> [YYYY-MM-DD] [YYYY-MM-DD] [chat_id]`
 - `/compare <@user1|id1> <@user2|id2> [YYYY-MM] [chat_id]`
@@ -142,6 +151,8 @@ Private chat commands:
 - `/autoretention off [chat_id]`
 - `/autospike on [hour] [threshold%] [chat_id]`
 - `/autospike off [chat_id]`
+- `/autofeedback on [hour] [chat_id]`
+- `/autofeedback off [chat_id]`
 - `/autoreport status [chat_id]`
 - `/autoprogress on [day] [hour] [chat_id]`
 - `/autoprogress off [chat_id]`

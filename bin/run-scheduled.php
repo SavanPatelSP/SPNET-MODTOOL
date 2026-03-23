@@ -341,6 +341,54 @@ function buildBurnoutRisks(array $mods, array $prevMods, array $config): array
     return array_slice($risks, 0, 6);
 }
 
+function buildMicroFeedbackMessage(array $mod, string $chatTitle, string $dateLabel, array $config): string
+{
+    $feedbackConfig = $config['micro_feedback'] ?? [];
+    $minMessages = (int)($feedbackConfig['min_messages'] ?? 10);
+    $minActiveHours = (float)($feedbackConfig['min_active_hours'] ?? 1.0);
+    $actionsWarn = (float)($feedbackConfig['actions_per_1k_warn'] ?? 35);
+    $positiveMessages = (int)($feedbackConfig['positive_messages'] ?? 50);
+    $positiveHours = (float)($feedbackConfig['positive_active_hours'] ?? 2.5);
+
+    $messages = (int)($mod['messages'] ?? 0);
+    $activeHours = ((float)($mod['active_minutes'] ?? 0)) / 60;
+    $actions = (int)($mod['warnings'] ?? 0) + (int)($mod['mutes'] ?? 0) + (int)($mod['bans'] ?? 0);
+    $actionsPer1k = $messages > 0 ? ($actions / $messages) * 1000 : ($actions > 0 ? 999 : 0);
+
+    $tips = [];
+    if ($messages <= 0 && $activeHours <= 0) {
+        $tips[] = 'No activity yesterday. Try to check in for 15–30 minutes.';
+    } else {
+        if ($activeHours < $minActiveHours) {
+            $tips[] = 'Try to stay active for at least ' . number_format($minActiveHours, 1) . 'h.';
+        }
+        if ($messages < $minMessages) {
+            $tips[] = 'Aim for ' . $minMessages . '+ messages to keep chats warm.';
+        }
+        if ($actions >= 3 && $actionsPer1k >= $actionsWarn) {
+            $tips[] = 'Moderation intensity was high; balance with chat support.';
+        }
+        if ($messages >= $positiveMessages && $activeHours >= $positiveHours) {
+            $tips[] = 'Great presence yesterday — keep it up.';
+        }
+    }
+
+    if (empty($tips)) {
+        $tips[] = 'Nice work yesterday. Keep the momentum.';
+    }
+
+    $lines = [];
+    $lines[] = '<b>Daily Micro‑Feedback</b>';
+    $lines[] = $chatTitle . ' · ' . $dateLabel;
+    $lines[] = 'Yesterday: ' . $messages . ' msgs · ' . number_format($activeHours, 1) . 'h active · ' . $actions . ' actions';
+    $lines[] = '';
+    foreach (array_slice($tips, 0, 3) as $tip) {
+        $lines[] = '• ' . htmlspecialchars($tip, ENT_QUOTES, 'UTF-8');
+    }
+
+    return implode("\n", $lines);
+}
+
 $ownerIds = $config['owner_user_ids'] ?? [];
 $ownerIds = array_values(array_filter(array_map('intval', is_array($ownerIds) ? $ownerIds : [])));
 $managerIds = $config['manager_user_ids'] ?? [];
@@ -350,9 +398,9 @@ $midMonthEnabled = (bool)($config['premium']['notifications']['mid_month_alert']
 $congratsEnabled = (bool)($config['premium']['notifications']['congrats'] ?? true);
 
 try {
-    $rows = $db->fetchAll('SELECT * FROM settings WHERE auto_report_enabled = 1 OR progress_report_enabled = 1 OR weekly_summary_enabled = 1 OR inactivity_alert_enabled = 1 OR ai_review_enabled = 1 OR retention_alert_enabled = 1 OR inactivity_spike_enabled = 1');
+    $rows = $db->fetchAll('SELECT * FROM settings WHERE auto_report_enabled = 1 OR progress_report_enabled = 1 OR weekly_summary_enabled = 1 OR inactivity_alert_enabled = 1 OR ai_review_enabled = 1 OR retention_alert_enabled = 1 OR inactivity_spike_enabled = 1 OR daily_feedback_enabled = 1');
 } catch (Throwable $e) {
-    echo "Report columns missing. Run migrations/002_auto_reports.sql, migrations/006_progress_reports.sql, migrations/015_weekly_summary.sql, migrations/016_inactivity_alerts.sql, migrations/017_ai_review.sql, migrations/018_retention_alerts.sql, and migrations/019_inactivity_spikes.sql\n";
+    echo "Report columns missing. Run migrations/002_auto_reports.sql, migrations/006_progress_reports.sql, migrations/015_weekly_summary.sql, migrations/016_inactivity_alerts.sql, migrations/017_ai_review.sql, migrations/018_retention_alerts.sql, migrations/019_inactivity_spikes.sql, and migrations/020_goals_and_feedback.sql\n";
     exit(1);
 }
 
@@ -844,6 +892,29 @@ foreach ($rows as $row) {
                             Logger::info('Inactivity alert sent for chat ' . $chatId . ' date ' . $period);
                         }
                     }
+                }
+            }
+        }
+    }
+
+    if (!empty($row['daily_feedback_enabled'])) {
+        $hour = (int)($row['daily_feedback_hour'] ?? 20);
+        if ($currentHour >= $hour) {
+            $todayKey = $nowLocal->format('Y-m-d');
+            if (empty($row['daily_feedback_last_date']) || $row['daily_feedback_last_date'] !== $todayKey) {
+                $yesterdayEnd = $nowLocal->modify('-1 day')->setTime(23, 59, 59);
+                $stats = $statsService->getRollingStats($chatId, 1, $yesterdayEnd);
+                if (!empty($stats['mods'])) {
+                    $chatRow = $db->fetch('SELECT title FROM chats WHERE id = ? LIMIT 1', [$chatId]);
+                    $chatTitle = $chatRow['title'] ?? ('Chat ' . $chatId);
+                    $dateLabel = $yesterdayEnd->format('Y-m-d');
+                    foreach ($stats['mods'] as $mod) {
+                        $userId = (int)$mod['user_id'];
+                        $message = buildMicroFeedbackMessage($mod, $chatTitle, $dateLabel, $config);
+                        $tg->sendMessage($userId, $message, ['parse_mode' => 'HTML']);
+                    }
+                    $settingsService->updateDailyFeedbackLast($chatId, $todayKey);
+                    Logger::info('Daily micro-feedback sent for chat ' . $chatId . ' date ' . $todayKey);
                 }
             }
         }

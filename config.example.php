@@ -166,6 +166,19 @@ return [
         'quality_min_actions' => 5,
     ],
 
+    // Daily micro-feedback defaults (private mod DMs)
+    'daily_feedback_defaults' => [
+        'enabled' => false,
+        'hour' => 20,
+    ],
+    'micro_feedback' => [
+        'min_messages' => 10,
+        'min_active_hours' => 1.0,
+        'actions_per_1k_warn' => 35,
+        'positive_messages' => 50,
+        'positive_active_hours' => 2.5,
+    ],
+
     // Coverage map (gap alerts)
     'coverage' => [
         'min_mods_per_hour' => 1,

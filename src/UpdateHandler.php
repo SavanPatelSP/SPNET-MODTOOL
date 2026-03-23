@@ -15,6 +15,7 @@ use App\Services\HealthService;
 use App\Services\PerformanceReviewService;
 use App\Services\RetentionRiskService;
 use App\Services\RosterService;
+use App\Services\ModGoalService;
 use App\Services\ArchiveService;
 use App\Services\ReportApprovalService;
 use App\Services\AuditLogService;
@@ -46,6 +47,7 @@ class UpdateHandler
     private PerformanceReviewService $performanceReview;
     private RetentionRiskService $retentionRisk;
     private RosterService $roster;
+    private ModGoalService $goals;
     private ArchiveService $archive;
     private ReportApprovalService $approvals;
     private AuditLogService $audit;
@@ -80,6 +82,7 @@ class UpdateHandler
         $this->performanceReview = new PerformanceReviewService($this->stats, $this->settings, $config);
         $this->retentionRisk = new RetentionRiskService($this->stats, $this->settings, $config);
         $this->roster = new RosterService($db);
+        $this->goals = new ModGoalService($db);
         $this->rewardSheet = new RewardSheet($this->stats, $this->rewards, $config, $this->rewardContext, $this->rewardHistory, $this->archive, $this->approvals);
         $this->rewardCsv = new RewardCsv($this->stats, $this->rewards, $this->rewardContext, $this->rewardHistory, $this->archive);
         $this->multiChatReport = new MultiChatReport($this->stats, $this->rewards, $config);
@@ -241,6 +244,7 @@ class UpdateHandler
             'premium', 'benefits', 'pricing', 'guide', 'giftplan', 'grantplan', 'approval', 'approvereport', 'approvalstatus', 'auditlogcsv',
             'buy_stars_test', 'buy_crypto_test', 'paystatus', 'debughours', 'debughoursall', 'finduser', 'autoweekly', 'autoinactive', 'activityrank',
             'aireview', 'autoaireview', 'retention', 'autoretention', 'timesheet', 'compare', 'weeklysummary', 'autospike',
+            'mydashboard', 'goalset', 'goalstatus', 'goalclear', 'autofeedback',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
 
@@ -378,6 +382,21 @@ class UpdateHandler
                         return;
                     case 'autospike':
                         $this->handleAutoSpike($chatId, $targetChatId, $cleanArgs, $userId);
+                        return;
+                    case 'autofeedback':
+                        $this->handleAutoFeedback($chatId, $targetChatId, $cleanArgs, $userId);
+                        return;
+                    case 'mydashboard':
+                        $this->handleMyDashboard($chatId, $targetChatId, $cleanArgs, $userId);
+                        return;
+                    case 'goalset':
+                        $this->handleGoalSet($chatId, $targetChatId, $cleanArgs, $message);
+                        return;
+                    case 'goalstatus':
+                        $this->handleGoalStatus($chatId, $targetChatId, $cleanArgs, $message);
+                        return;
+                    case 'goalclear':
+                        $this->handleGoalClear($chatId, $targetChatId, $cleanArgs, $message);
                         return;
                     case 'progress':
                         $this->handleProgressReport($chatId, $targetChatId, $cleanArgs);
@@ -3157,6 +3176,451 @@ class UpdateHandler
         $this->tg->sendMessage($responseChatId, 'Usage: /autospike on [hour] [threshold%] [chat_id] | /autospike off [chat_id] | /autospike status [chat_id]', ['parse_mode' => 'HTML']);
     }
 
+    private function handleAutoFeedback(int|string $responseChatId, int|string $chatId, string $args, int|string $userId): void
+    {
+        if (!$this->isManager($userId)) {
+            $this->tg->sendMessage($responseChatId, 'Only bot managers or owners can change daily feedback.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $parts = preg_split('/\s+/', trim($args));
+        $action = strtolower($parts[0] ?? 'status');
+        $settings = $this->settings->get($chatId);
+
+        if ($action === '' || $action === 'status') {
+            $status = !empty($settings['daily_feedback_enabled']) ? 'ON' : 'OFF';
+            $hour = (int)($settings['daily_feedback_hour'] ?? 20);
+            $this->tg->sendMessage($responseChatId, 'Daily micro-feedback: ' . $status . ' | Hour ' . $hour . ':00.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        if ($action === 'on') {
+            $hour = isset($parts[1]) ? (int)$parts[1] : null;
+            if ($hour !== null && ($hour < 0 || $hour > 23)) {
+                $this->tg->sendMessage($responseChatId, 'Hour must be between 0 and 23.', ['parse_mode' => 'HTML']);
+                return;
+            }
+            $this->settings->updateDailyFeedback($chatId, true, $hour);
+            $this->tg->sendMessage($responseChatId, 'Daily micro-feedback enabled.', ['parse_mode' => 'HTML']);
+            if ($this->shouldLog('log_commands')) {
+                Logger::infoContext('Daily micro-feedback enabled', $this->logContextForChat($chatId, [
+                    'hour' => $hour,
+                ]));
+            }
+            return;
+        }
+
+        if ($action === 'off') {
+            $this->settings->updateDailyFeedback($chatId, false, null);
+            $this->tg->sendMessage($responseChatId, 'Daily micro-feedback disabled.', ['parse_mode' => 'HTML']);
+            if ($this->shouldLog('log_commands')) {
+                Logger::infoContext('Daily micro-feedback disabled', $this->logContextForChat($chatId));
+            }
+            return;
+        }
+
+        $this->tg->sendMessage($responseChatId, 'Usage: /autofeedback on [hour] [chat_id] | /autofeedback off [chat_id] | /autofeedback status [chat_id]', ['parse_mode' => 'HTML']);
+    }
+
+    private function handleMyDashboard(int|string $responseChatId, int|string $chatId, string $args, int|string $userId): void
+    {
+        $month = null;
+        $tokens = preg_split('/\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^\d{4}-\d{2}$/', $token)) {
+                $month = $token;
+                break;
+            }
+        }
+
+        $stats = $this->stats->getMonthlyStats($chatId, $month);
+        if (empty($stats['mods'])) {
+            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $target = null;
+        foreach ($stats['mods'] as $mod) {
+            if ((int)$mod['user_id'] === (int)$userId) {
+                $target = $mod;
+                break;
+            }
+        }
+        if (!$target) {
+            $this->tg->sendMessage($responseChatId, 'You are not a mod in this chat yet.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $rank = 1;
+        foreach ($stats['mods'] as $mod) {
+            if ((int)$mod['user_id'] === (int)$userId) {
+                break;
+            }
+            $rank++;
+        }
+        $totalMods = count($stats['mods']);
+        $actions = (int)($target['warnings'] ?? 0) + (int)($target['mutes'] ?? 0) + (int)($target['bans'] ?? 0);
+        $activeHours = ((float)($target['active_minutes'] ?? 0)) / 60;
+        $presenceHours = ((float)($target['membership_minutes'] ?? 0)) / 60;
+
+        $badges = [];
+        foreach ($this->buildPerformanceBadges($stats['mods']) as $badge) {
+            if (!empty($badge['user_id']) && (int)$badge['user_id'] === (int)$userId) {
+                $badges[] = $badge['title'];
+            }
+        }
+
+        $monthKey = $stats['range']['month'] ?? $month ?? (new DateTimeImmutable('now', new DateTimeZone($stats['timezone'] ?? 'UTC')))->format('Y-m');
+        $goalRow = $this->goals->getGoal($chatId, $userId, $monthKey);
+        $goalLines = $this->buildGoalProgressLines($goalRow, $target);
+        $feedbackLines = $this->buildPersonalFeedback($target);
+
+        $chatRow = $this->db->fetch('SELECT title FROM chats WHERE id = ? LIMIT 1', [$chatId]);
+        $chatTitle = $chatRow['title'] ?? ('Chat ' . $chatId);
+
+        $lines = [];
+        $lines[] = '<b>Your Mod Dashboard</b>';
+        $lines[] = $this->escape($chatTitle) . ' · ' . $this->escape($stats['range']['label'] ?? $monthKey);
+        $lines[] = 'Rank: #' . $rank . ' of ' . $totalMods;
+        $lines[] = 'Messages: ' . number_format((int)($target['messages'] ?? 0));
+        $lines[] = 'Active hours: ' . number_format($activeHours, 1) . 'h';
+        $lines[] = 'Presence hours: ' . number_format($presenceHours, 1) . 'h';
+        $lines[] = 'Actions: ' . $actions;
+        $lines[] = 'Consistency: ' . number_format((float)($target['consistency_index'] ?? 0), 1) . '%';
+        $lines[] = 'Score: ' . number_format((float)($target['score'] ?? 0), 2);
+        if (($target['improvement'] ?? null) !== null) {
+            $lines[] = 'Trend: ' . number_format((float)$target['improvement'], 1) . '% vs last month';
+        }
+        $lines[] = '';
+        $lines[] = '<b>Badges</b>';
+        $lines[] = empty($badges) ? 'No badges yet.' : implode(', ', $badges);
+        $lines[] = '';
+        $lines[] = '<b>Goals</b>';
+        if (empty($goalLines)) {
+            $lines[] = 'No goals set. Use /goalset messages 500 or /goalset active_hours 12.';
+        } else {
+            foreach ($goalLines as $line) {
+                $lines[] = $line;
+            }
+        }
+        $lines[] = '';
+        $lines[] = '<b>Feedback</b>';
+        foreach ($feedbackLines as $line) {
+            $lines[] = '• ' . $line;
+        }
+
+        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+    }
+
+    private function handleGoalSet(int|string $responseChatId, int|string $chatId, string $args, array $message): void
+    {
+        $tokens = preg_split('/\s+/', trim($args));
+        if (count($tokens) < 2) {
+            $this->tg->sendMessage($responseChatId, 'Usage: /goalset <messages|active_hours|actions|days_active|score> <value> [YYYY-MM] [@user]', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $metric = strtolower($tokens[0] ?? '');
+        $valueToken = $tokens[1] ?? null;
+        if ($valueToken === null || !is_numeric($valueToken)) {
+            $this->tg->sendMessage($responseChatId, 'Goal value must be a number.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $metric = $this->normalizeGoalMetric($metric);
+        if ($metric === null) {
+            $this->tg->sendMessage($responseChatId, 'Unknown goal type. Use messages, active_hours, actions, days_active, or score.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $month = null;
+        $targetUserId = $message['from']['id'];
+        $targetUsername = null;
+
+        if (isset($message['reply_to_message']['from'])) {
+            $targetUserId = $message['reply_to_message']['from']['id'];
+            $targetUsername = $message['reply_to_message']['from']['username'] ?? null;
+        }
+
+        foreach (array_slice($tokens, 2) as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^\d{4}-\d{2}$/', $token)) {
+                $month = $token;
+                continue;
+            }
+            if (strpos($token, '@') === 0) {
+                $targetUsername = substr($token, 1);
+                $targetUserId = null;
+            } elseif (is_numeric($token)) {
+                $targetUserId = (int)$token;
+                $targetUsername = null;
+            }
+        }
+
+        $actorId = $message['from']['id'];
+        if ($targetUserId !== $actorId || $targetUsername !== null) {
+            if (!$this->isManager($actorId)) {
+                $this->tg->sendMessage($responseChatId, 'You can only set your own goals.', ['parse_mode' => 'HTML']);
+                return;
+            }
+            $target = $this->findChatUser($chatId, $targetUserId ? (int)$targetUserId : null, $targetUsername);
+            if (!$target) {
+                $this->tg->sendMessage($responseChatId, 'User not found in this chat.', ['parse_mode' => 'HTML']);
+                return;
+            }
+            $targetUserId = (int)$target['id'];
+        }
+
+        if (!$this->isMod($chatId, $targetUserId)) {
+            $this->tg->sendMessage($responseChatId, 'Goals can only be set for mods.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        if ($month === null) {
+            $month = $this->currentMonthKey($chatId);
+        }
+
+        $value = (float)$valueToken;
+        $this->goals->setGoal($chatId, $targetUserId, $month, $metric, $value);
+        $this->tg->sendMessage($responseChatId, 'Goal saved for ' . $month . '.', ['parse_mode' => 'HTML']);
+    }
+
+    private function handleGoalStatus(int|string $responseChatId, int|string $chatId, string $args, array $message): void
+    {
+        $month = null;
+        $targetUserId = $message['from']['id'];
+        $targetUsername = null;
+
+        if (isset($message['reply_to_message']['from'])) {
+            $targetUserId = $message['reply_to_message']['from']['id'];
+            $targetUsername = $message['reply_to_message']['from']['username'] ?? null;
+        }
+
+        $tokens = preg_split('/\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^\d{4}-\d{2}$/', $token)) {
+                $month = $token;
+                continue;
+            }
+            if (strpos($token, '@') === 0) {
+                $targetUsername = substr($token, 1);
+                $targetUserId = null;
+            } elseif (is_numeric($token)) {
+                $targetUserId = (int)$token;
+                $targetUsername = null;
+            }
+        }
+
+        $actorId = $message['from']['id'];
+        if ($targetUserId !== $actorId || $targetUsername !== null) {
+            if (!$this->isManager($actorId)) {
+                $this->tg->sendMessage($responseChatId, 'You can only view your own goals.', ['parse_mode' => 'HTML']);
+                return;
+            }
+            $target = $this->findChatUser($chatId, $targetUserId ? (int)$targetUserId : null, $targetUsername);
+            if (!$target) {
+                $this->tg->sendMessage($responseChatId, 'User not found in this chat.', ['parse_mode' => 'HTML']);
+                return;
+            }
+            $targetUserId = (int)$target['id'];
+        }
+
+        if ($month === null) {
+            $month = $this->currentMonthKey($chatId);
+        }
+
+        $stats = $this->stats->getMonthlyStats($chatId, $month);
+        $target = null;
+        foreach ($stats['mods'] as $mod) {
+            if ((int)$mod['user_id'] === (int)$targetUserId) {
+                $target = $mod;
+                break;
+            }
+        }
+        if (!$target) {
+            $this->tg->sendMessage($responseChatId, 'Mod not found in this chat.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $goalRow = $this->goals->getGoal($chatId, $targetUserId, $month);
+        $goalLines = $this->buildGoalProgressLines($goalRow, $target);
+        if (empty($goalLines)) {
+            $this->tg->sendMessage($responseChatId, 'No goals set for this month.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $lines = [];
+        $lines[] = '<b>Goal Tracker</b>';
+        $lines[] = $this->escape($stats['range']['label'] ?? $month);
+        foreach ($goalLines as $line) {
+            $lines[] = $line;
+        }
+        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+    }
+
+    private function handleGoalClear(int|string $responseChatId, int|string $chatId, string $args, array $message): void
+    {
+        $month = null;
+        $targetUserId = $message['from']['id'];
+        $targetUsername = null;
+
+        if (isset($message['reply_to_message']['from'])) {
+            $targetUserId = $message['reply_to_message']['from']['id'];
+            $targetUsername = $message['reply_to_message']['from']['username'] ?? null;
+        }
+
+        $tokens = preg_split('/\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^\d{4}-\d{2}$/', $token)) {
+                $month = $token;
+                continue;
+            }
+            if (strpos($token, '@') === 0) {
+                $targetUsername = substr($token, 1);
+                $targetUserId = null;
+            } elseif (is_numeric($token)) {
+                $targetUserId = (int)$token;
+                $targetUsername = null;
+            }
+        }
+
+        $actorId = $message['from']['id'];
+        if ($targetUserId !== $actorId || $targetUsername !== null) {
+            if (!$this->isManager($actorId)) {
+                $this->tg->sendMessage($responseChatId, 'You can only clear your own goals.', ['parse_mode' => 'HTML']);
+                return;
+            }
+            $target = $this->findChatUser($chatId, $targetUserId ? (int)$targetUserId : null, $targetUsername);
+            if (!$target) {
+                $this->tg->sendMessage($responseChatId, 'User not found in this chat.', ['parse_mode' => 'HTML']);
+                return;
+            }
+            $targetUserId = (int)$target['id'];
+        }
+
+        if ($month === null) {
+            $month = $this->currentMonthKey($chatId);
+        }
+
+        $this->goals->clearGoals($chatId, $targetUserId, $month);
+        $this->tg->sendMessage($responseChatId, 'Goals cleared for ' . $month . '.', ['parse_mode' => 'HTML']);
+    }
+
+    private function buildGoalProgressLines(?array $goalRow, array $mod): array
+    {
+        if (!$goalRow) {
+            return [];
+        }
+
+        $lines = [];
+        $map = [
+            'messages_target' => ['label' => 'Messages', 'current' => (float)($mod['messages'] ?? 0), 'decimals' => 0],
+            'active_hours_target' => ['label' => 'Active hours', 'current' => ((float)($mod['active_minutes'] ?? 0)) / 60, 'decimals' => 1],
+            'actions_target' => ['label' => 'Actions', 'current' => (float)((($mod['warnings'] ?? 0) + ($mod['mutes'] ?? 0) + ($mod['bans'] ?? 0))), 'decimals' => 0],
+            'days_active_target' => ['label' => 'Active days', 'current' => (float)($mod['days_active'] ?? 0), 'decimals' => 0],
+            'score_target' => ['label' => 'Score', 'current' => (float)($mod['score'] ?? 0), 'decimals' => 2],
+        ];
+
+        foreach ($map as $field => $meta) {
+            if (!isset($goalRow[$field]) || $goalRow[$field] === null) {
+                continue;
+            }
+            $target = (float)$goalRow[$field];
+            if ($target <= 0) {
+                continue;
+            }
+            $current = (float)$meta['current'];
+            $pct = min(200, ($current / $target) * 100);
+            $decimals = (int)($meta['decimals'] ?? 0);
+            $lines[] = $meta['label'] . ': ' . number_format($current, $decimals) . ' / ' . number_format($target, $decimals) . ' (' . number_format($pct, 0) . '%)';
+        }
+
+        return $lines;
+    }
+
+    private function normalizeGoalMetric(string $metric): ?string
+    {
+        $metric = strtolower(trim($metric));
+        $map = [
+            'message' => 'messages',
+            'messages' => 'messages',
+            'msg' => 'messages',
+            'msgs' => 'messages',
+            'active_hours' => 'active_hours',
+            'hours' => 'active_hours',
+            'hour' => 'active_hours',
+            'active' => 'active_hours',
+            'actions' => 'actions',
+            'action' => 'actions',
+            'days' => 'days_active',
+            'days_active' => 'days_active',
+            'score' => 'score',
+        ];
+        return $map[$metric] ?? null;
+    }
+
+    private function currentMonthKey(int|string $chatId): string
+    {
+        $settings = $this->settings->get($chatId);
+        $timezone = $settings['timezone'] ?? ($this->config['timezone'] ?? 'UTC');
+        $tz = new DateTimeZone($timezone);
+        return (new DateTimeImmutable('now', $tz))->format('Y-m');
+    }
+
+    private function buildPersonalFeedback(array $mod): array
+    {
+        $feedbackConfig = $this->config['micro_feedback'] ?? [];
+        $minMessages = (int)($feedbackConfig['min_messages'] ?? 10);
+        $minActiveHours = (float)($feedbackConfig['min_active_hours'] ?? 1.0);
+        $actionsWarn = (float)($feedbackConfig['actions_per_1k_warn'] ?? 35);
+        $positiveMessages = (int)($feedbackConfig['positive_messages'] ?? 50);
+        $positiveHours = (float)($feedbackConfig['positive_active_hours'] ?? 2.5);
+
+        $messages = (int)($mod['messages'] ?? 0);
+        $activeHours = ((float)($mod['active_minutes'] ?? 0)) / 60;
+        $actions = (int)($mod['warnings'] ?? 0) + (int)($mod['mutes'] ?? 0) + (int)($mod['bans'] ?? 0);
+        $actionsPer1k = $messages > 0 ? ($actions / $messages) * 1000 : ($actions > 0 ? 999 : 0);
+        $consistency = (float)($mod['consistency_index'] ?? 0);
+        $improvement = $mod['improvement'] ?? null;
+
+        $tips = [];
+        if ($consistency < 40) {
+            $tips[] = 'Consistency is low. Aim for more active days.';
+        }
+        if ($messages < ($minMessages * 2)) {
+            $tips[] = 'Try to increase chat engagement (messages are low).';
+        }
+        if ($activeHours < ($minActiveHours * 2)) {
+            $tips[] = 'Spend a bit more time in chat to build presence.';
+        }
+        if ($actions >= 3 && $actionsPer1k >= $actionsWarn) {
+            $tips[] = 'Moderation intensity is high; balance with chat support.';
+        }
+        if ($improvement !== null && $improvement < 0) {
+            $tips[] = 'Score is trending down vs last month. Focus on balance.';
+        }
+        if ($messages >= $positiveMessages && $activeHours >= $positiveHours) {
+            $tips[] = 'Great presence this month — keep it up.';
+        }
+
+        if (empty($tips)) {
+            $tips[] = 'Nice work. Keep a steady pace this month.';
+        }
+
+        return array_slice($tips, 0, 3);
+    }
+
     private function buildWeeklySummaryLines(int|string $chatId, array $stats, int $days): array
     {
         $chatRow = $this->db->fetch('SELECT title FROM chats WHERE id = ? LIMIT 1', [$chatId]);
@@ -3425,6 +3889,7 @@ class UpdateHandler
         if ($topHelper) {
             $badges[] = [
                 'title' => 'Top Helper',
+                'user_id' => $topHelper['user_id'],
                 'name' => $topHelper['display_name'],
                 'meta' => number_format((int)($topHelper['messages'] ?? 0)) . ' msgs',
             ];
@@ -3432,6 +3897,7 @@ class UpdateHandler
         if ($mostBalanced) {
             $badges[] = [
                 'title' => 'Most Balanced',
+                'user_id' => $mostBalanced['user_id'],
                 'name' => $mostBalanced['display_name'],
                 'meta' => $mostBalancedMeta,
             ];
@@ -3439,6 +3905,7 @@ class UpdateHandler
         if ($consistencyKing) {
             $badges[] = [
                 'title' => 'Consistency King',
+                'user_id' => $consistencyKing['user_id'],
                 'name' => $consistencyKing['display_name'],
                 'meta' => number_format((float)($consistencyKing['consistency_index'] ?? 0), 1) . '%',
             ];
@@ -3446,6 +3913,7 @@ class UpdateHandler
         if ($fastResponder && $fastRate !== null) {
             $badges[] = [
                 'title' => 'Fast Responder',
+                'user_id' => $fastResponder['user_id'],
                 'name' => $fastResponder['display_name'],
                 'meta' => number_format($fastRate, 1) . ' msgs/hr',
             ];
@@ -4004,6 +4472,10 @@ class UpdateHandler
                 '/mychats - list your group chats',
                 '/usechat &lt;chat_id&gt; | /usechat &lt;title&gt; | /usechat off',
                 '/guide (full usage guide with examples)',
+                '/mydashboard [YYYY-MM]',
+                '/goalset &lt;metric&gt; &lt;value&gt; [YYYY-MM]',
+                '/goalstatus [YYYY-MM]',
+                '/goalclear [YYYY-MM]',
                 '/stats [chat_id] [YYYY-MM] [@user]',
                 '/finduser &lt;name|@username|user_id&gt; [chat_id]',
                 '/timesheet &lt;@username|user_id&gt; [YYYY-MM-DD] [YYYY-MM-DD] [chat_id]',
@@ -4042,6 +4514,7 @@ class UpdateHandler
                 '/autoinactive on [days] [hour] [chat_id]',
                 '/autoaireview on [day] [hour] [chat_id]',
                 '/autoretention on [day] [hour] [threshold%] [chat_id]',
+                '/autofeedback on [hour] [chat_id]',
                 '/activityrank [chat_id] [YYYY-MM] [top]',
                 '/aireview [chat_id] [YYYY-MM]',
                 '/retention [chat_id] [YYYY-MM] [threshold%]',
@@ -4125,6 +4598,13 @@ class UpdateHandler
             'Weekly summary DMs include a one-line TL;DR with quick summary + top risk + top reward.',
             'Weekly summary includes performance badges (Top Helper, Most Balanced, Consistency King, Fast Responder).',
             '',
+            '<b>Personal dashboard + goals</b>',
+            '<code>/mydashboard</code>',
+            '<code>/goalset messages 500</code>',
+            '<code>/goalset active_hours 12</code>',
+            '<code>/goalstatus</code>',
+            '<code>/goalclear</code>',
+            '',
             '<b>Leaderboards</b>',
             '<code>/leaderboard</code>',
             '<code>/leaderboard 2026-02</code>',
@@ -4159,6 +4639,7 @@ class UpdateHandler
             '<code>/autoaireview on 1 9</code> (monthly AI review)',
             '<code>/autoretention on 2 10 30%</code> (retention drop alerts)',
             '<code>/autospike on 10 35%</code> (inactivity spike alerts)',
+            '<code>/autofeedback on 20</code> (daily micro-feedback DMs)',
             '',
             '<b>Approvals + audit log</b>',
             '<code>/approval on</code>',
