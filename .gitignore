@@ -2,4 +2,8 @@ config.local.php
 storage/offset.txt
 storage/logs/
 storage/reports/
+vendor/
+.phpunit.result.cache
+composer
+composer-setup.php
 .DS_Store

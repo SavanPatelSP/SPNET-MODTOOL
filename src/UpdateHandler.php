@@ -3217,7 +3217,158 @@ class UpdateHandler
             $lines[] = implode(', ', array_slice($alerts, 0, 8));
         }
 
+        $badges = $this->buildPerformanceBadges($stats['mods'] ?? []);
+        if (!empty($badges)) {
+            $lines[] = '';
+            $lines[] = '<b>Performance Badges</b>';
+            foreach ($badges as $badge) {
+                $line = $badge['title'] . ': ' . $badge['name'];
+                if (!empty($badge['meta'])) {
+                    $line .= ' (' . $badge['meta'] . ')';
+                }
+                $lines[] = $line;
+            }
+        }
+
         return $lines;
+    }
+
+    private function buildPerformanceBadges(array $mods): array
+    {
+        if (empty($mods)) {
+            return [];
+        }
+
+        $weights = $this->config['score_weights'] ?? [];
+        $fastMinMessages = 15;
+        $fastMinHours = 1.0;
+        $balancedMinMessages = 15;
+        $balancedMinActions = 1;
+
+        $topHelper = null;
+        $topHelperMessages = -1;
+        $consistencyKing = null;
+        $consistencyMax = -1.0;
+        $fastResponder = null;
+        $fastRate = null;
+        $fastFallback = null;
+        $fastFallbackRate = null;
+        $mostBalanced = null;
+        $mostBalancedScore = null;
+        $balancedFallback = null;
+        $balancedFallbackScore = null;
+        $mostBalancedMeta = '';
+        $balancedFallbackMeta = '';
+
+        foreach ($mods as $mod) {
+            $messages = (int)($mod['messages'] ?? 0);
+            if ($messages > $topHelperMessages) {
+                $topHelperMessages = $messages;
+                $topHelper = $mod;
+            }
+            $consistency = (float)($mod['consistency_index'] ?? 0);
+            if ($consistency > $consistencyMax) {
+                $consistencyMax = $consistency;
+                $consistencyKing = $mod;
+            }
+
+            $activeMinutes = (float)($mod['active_minutes'] ?? 0);
+            $hours = $activeMinutes / 60;
+            if ($messages > 0 && $hours > 0) {
+                $rate = $messages / $hours;
+                if ($messages >= $fastMinMessages && $hours >= $fastMinHours) {
+                    if ($fastRate === null || $rate > $fastRate) {
+                        $fastRate = $rate;
+                        $fastResponder = $mod;
+                    }
+                } else {
+                    if ($fastFallbackRate === null || $rate > $fastFallbackRate) {
+                        $fastFallbackRate = $rate;
+                        $fastFallback = $mod;
+                    }
+                }
+            }
+
+            $warnings = (int)($mod['warnings'] ?? 0);
+            $mutes = (int)($mod['mutes'] ?? 0);
+            $bans = (int)($mod['bans'] ?? 0);
+            $actions = $warnings + $mutes + $bans;
+            $daysActive = (int)($mod['days_active'] ?? 0);
+            $roleMultiplier = (float)($mod['role_multiplier'] ?? 1.0);
+
+            $chatScore = 0.0;
+            $chatScore += log(1 + $messages) * ($weights['message'] ?? 1.0);
+            $chatScore += sqrt($activeMinutes) * ($weights['active_minute'] ?? 0.0);
+            $chatScore += $daysActive * ($weights['day_active'] ?? 0.0);
+            $chatScore *= $roleMultiplier;
+
+            $actionScore = 0.0;
+            $actionScore += $warnings * ($weights['warn'] ?? 1.0);
+            $actionScore += $mutes * ($weights['mute'] ?? 1.0);
+            $actionScore += $bans * ($weights['ban'] ?? 1.0);
+            $actionScore *= $roleMultiplier;
+
+            if ($chatScore > 0 && $actionScore > 0) {
+                $balanceRatio = 1 - (abs($chatScore - $actionScore) / max($chatScore, $actionScore, 1.0));
+                $score = ($chatScore + $actionScore) * $balanceRatio;
+                $meta = 'Balance ' . number_format($balanceRatio * 100, 0) . '% · ' . $messages . ' msgs · ' . $actions . ' actions';
+
+                if ($messages >= $balancedMinMessages && $actions >= $balancedMinActions) {
+                    if ($mostBalancedScore === null || $score > $mostBalancedScore) {
+                        $mostBalancedScore = $score;
+                        $mostBalanced = $mod;
+                        $mostBalancedMeta = $meta;
+                    }
+                } else {
+                    if ($balancedFallbackScore === null || $score > $balancedFallbackScore) {
+                        $balancedFallbackScore = $score;
+                        $balancedFallback = $mod;
+                        $balancedFallbackMeta = $meta;
+                    }
+                }
+            }
+        }
+
+        if ($fastResponder === null && $fastFallback !== null) {
+            $fastResponder = $fastFallback;
+            $fastRate = $fastFallbackRate;
+        }
+        if ($mostBalanced === null && $balancedFallback !== null) {
+            $mostBalanced = $balancedFallback;
+            $mostBalancedMeta = $balancedFallbackMeta;
+        }
+
+        $badges = [];
+        if ($topHelper) {
+            $badges[] = [
+                'title' => 'Top Helper',
+                'name' => $topHelper['display_name'],
+                'meta' => number_format((int)($topHelper['messages'] ?? 0)) . ' msgs',
+            ];
+        }
+        if ($mostBalanced) {
+            $badges[] = [
+                'title' => 'Most Balanced',
+                'name' => $mostBalanced['display_name'],
+                'meta' => $mostBalancedMeta,
+            ];
+        }
+        if ($consistencyKing) {
+            $badges[] = [
+                'title' => 'Consistency King',
+                'name' => $consistencyKing['display_name'],
+                'meta' => number_format((float)($consistencyKing['consistency_index'] ?? 0), 1) . '%',
+            ];
+        }
+        if ($fastResponder && $fastRate !== null) {
+            $badges[] = [
+                'title' => 'Fast Responder',
+                'name' => $fastResponder['display_name'],
+                'meta' => number_format($fastRate, 1) . ' msgs/hr',
+            ];
+        }
+
+        return $badges;
     }
 
     private function buildWeeklySummaryTldr(int|string $chatId, array $stats, int $days): string
