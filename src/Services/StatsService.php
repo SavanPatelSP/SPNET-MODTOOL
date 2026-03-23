@@ -667,6 +667,51 @@ class StatsService
         ];
     }
 
+    public function getActionRiskStats(int|string $chatId, array $range, array $modIds, int $newUserDays = 7): array
+    {
+        $modIds = array_values(array_filter(array_map('intval', $modIds)));
+        if (empty($modIds)) {
+            return [];
+        }
+
+        $newUserDays = max(1, (int)$newUserDays);
+        $modPlaceholders = implode(',', array_fill(0, count($modIds), '?'));
+
+        $rows = $this->db->fetchAll(
+            'SELECT a.mod_id,
+                    COUNT(*) as total_actions,
+                    SUM(CASE
+                        WHEN fj.first_join IS NOT NULL
+                             AND fj.first_join <= a.created_at
+                             AND TIMESTAMPDIFF(DAY, fj.first_join, a.created_at) <= ?
+                        THEN 1 ELSE 0 END) AS new_user_actions
+             FROM actions a
+             LEFT JOIN (
+                SELECT user_id, MIN(joined_at) as first_join
+                FROM memberships
+                WHERE chat_id = ?
+                GROUP BY user_id
+             ) fj ON fj.user_id = a.target_user_id
+             WHERE a.chat_id = ?
+               AND a.created_at >= ?
+               AND a.created_at < ?
+               AND a.mod_id IN (' . $modPlaceholders . ')
+             GROUP BY a.mod_id',
+            array_merge([$newUserDays, $chatId, $chatId, $range['start_utc'], $range['end_utc']], $modIds)
+        );
+
+        $map = [];
+        foreach ($rows as $row) {
+            $modId = (int)$row['mod_id'];
+            $map[$modId] = [
+                'total_actions' => (int)($row['total_actions'] ?? 0),
+                'new_user_actions' => (int)($row['new_user_actions'] ?? 0),
+            ];
+        }
+
+        return $map;
+    }
+
     private function getExternalStatsMap(int|string $chatId, string $month): array
     {
         $rows = $this->db->fetchAll(

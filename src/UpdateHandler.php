@@ -3230,7 +3230,90 @@ class UpdateHandler
             }
         }
 
+        $burnoutRisks = $this->buildBurnoutRisks($chatId);
+        if (!empty($burnoutRisks)) {
+            $lines[] = '';
+            $lines[] = '<b>Burnout Risk (MTD)</b>';
+            foreach ($burnoutRisks as $risk) {
+                $line = $risk['name'] . ' · ' . number_format((float)($risk['active_hours'] ?? 0), 1) . 'h';
+                if (($risk['consistency_drop'] ?? null) !== null) {
+                    $line .= ' · Consistency -' . number_format((float)$risk['consistency_drop'], 1) . '%';
+                }
+                if (($risk['improvement'] ?? null) !== null && $risk['improvement'] < 0) {
+                    $line .= ' · Score ' . number_format((float)$risk['improvement'], 1) . '%';
+                }
+                $lines[] = $line;
+            }
+        }
+
         return $lines;
+    }
+
+    private function buildBurnoutRisks(int|string $chatId): array
+    {
+        $settings = $this->settings->get($chatId);
+        $timezone = $settings['timezone'] ?? ($this->config['timezone'] ?? 'UTC');
+        $tz = new DateTimeZone($timezone);
+        $nowLocal = new DateTimeImmutable('now', $tz);
+        $monthKey = $nowLocal->format('Y-m');
+        $bundle = $this->stats->getMonthlyStats($chatId, $monthKey);
+        if (empty($bundle['mods'])) {
+            return [];
+        }
+        $prevMonthKey = $nowLocal->modify('first day of last month')->format('Y-m');
+        $prevBundle = $this->stats->getMonthlyStats($chatId, $prevMonthKey);
+        return $this->computeBurnoutRisks($bundle['mods'], $prevBundle['mods'] ?? []);
+    }
+
+    private function computeBurnoutRisks(array $mods, array $prevMods): array
+    {
+        $prevMap = [];
+        foreach ($prevMods as $mod) {
+            $prevMap[(int)$mod['user_id']] = $mod;
+        }
+
+        $riskConfig = $this->config['burnout_risk'] ?? [];
+        $minHours = (float)($riskConfig['min_active_hours'] ?? 40);
+        $consistencyDrop = (float)($riskConfig['consistency_drop'] ?? 15);
+        $improvementDrop = (float)($riskConfig['improvement_drop'] ?? -10);
+        $qualityPer1k = (float)($riskConfig['quality_actions_per_1k'] ?? 35);
+        $qualityMinActions = (int)($riskConfig['quality_min_actions'] ?? 5);
+
+        $risks = [];
+        foreach ($mods as $mod) {
+            $activeHours = ((float)($mod['active_minutes'] ?? 0)) / 60;
+            if ($activeHours < $minHours) {
+                continue;
+            }
+
+            $prev = $prevMap[(int)$mod['user_id']] ?? null;
+            $prevConsistency = $prev ? (float)($prev['consistency_index'] ?? 0) : null;
+            $consistency = (float)($mod['consistency_index'] ?? 0);
+            $consistencyDropValue = $prevConsistency !== null ? ($prevConsistency - $consistency) : null;
+
+            $improvement = $mod['improvement'] ?? null;
+            $actions = (int)($mod['warnings'] ?? 0) + (int)($mod['mutes'] ?? 0) + (int)($mod['bans'] ?? 0);
+            $messages = (int)($mod['messages'] ?? 0);
+            $actionsPer1k = $messages > 0 ? ($actions / $messages) * 1000 : ($actions > 0 ? 999 : 0);
+            $qualityFlag = $actions >= $qualityMinActions && $actionsPer1k >= $qualityPer1k;
+
+            $consistencyFlag = $consistencyDropValue !== null && $consistencyDropValue >= $consistencyDrop;
+            $improvementFlag = $improvement !== null && $improvement <= $improvementDrop;
+
+            if (!$consistencyFlag && !$improvementFlag && !$qualityFlag) {
+                continue;
+            }
+
+            $risks[] = [
+                'name' => $mod['display_name'],
+                'active_hours' => $activeHours,
+                'consistency_drop' => $consistencyDropValue,
+                'improvement' => $improvement,
+            ];
+        }
+
+        usort($risks, fn($a, $b) => ($b['active_hours'] <=> $a['active_hours']));
+        return array_slice($risks, 0, 6);
     }
 
     private function buildPerformanceBadges(array $mods): array
@@ -4105,6 +4188,7 @@ class UpdateHandler
             'Tip: add <code>&amp;chat_id=...&amp;month=YYYY-MM&amp;budget=5000</code>',
             'Dashboard highlights show badges (Top Helper, Most Balanced, Consistency King, Fast Responder).',
             'Planning cards: Reward Forecast (MTD pace), Budget Optimizer, Bonus Split Planner.',
+            'Risk signals: Conflict/Spam risk + Burnout risk.',
             '',
             '<b>Imports</b>',
             '<code>php bin/import-chatkeeper.php --file=/path/analysis_users.csv --chat=&lt;chat_id&gt; --month=2026-02</code>',

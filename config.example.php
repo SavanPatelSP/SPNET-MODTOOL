@@ -145,6 +145,27 @@ return [
         'min_actions' => 3,
     ],
 
+    // Conflict / spam risk detection
+    'conflict_risk' => [
+        'new_user_days' => 7,
+        'min_actions' => 5,
+        'actions_per_1k' => 35,
+        'new_user_share' => 0.6,
+        'high_risk_chat_ids' => [],
+        'high_risk_min_actions' => 3,
+        'high_risk_actions_per_1k' => 28,
+        'high_risk_new_user_share' => 0.5,
+    ],
+
+    // Burnout risk thresholds
+    'burnout_risk' => [
+        'min_active_hours' => 40,
+        'consistency_drop' => 15,
+        'improvement_drop' => -10,
+        'quality_actions_per_1k' => 35,
+        'quality_min_actions' => 5,
+    ],
+
     // Coverage map (gap alerts)
     'coverage' => [
         'min_mods_per_hour' => 1,

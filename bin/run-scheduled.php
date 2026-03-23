@@ -286,6 +286,61 @@ function buildPerformanceBadges(array $mods, array $config): array
     return $badges;
 }
 
+function buildBurnoutRisks(array $mods, array $prevMods, array $config): array
+{
+    if (empty($mods)) {
+        return [];
+    }
+
+    $prevMap = [];
+    foreach ($prevMods as $mod) {
+        $prevMap[(int)$mod['user_id']] = $mod;
+    }
+
+    $riskConfig = $config['burnout_risk'] ?? [];
+    $minHours = (float)($riskConfig['min_active_hours'] ?? 40);
+    $consistencyDrop = (float)($riskConfig['consistency_drop'] ?? 15);
+    $improvementDrop = (float)($riskConfig['improvement_drop'] ?? -10);
+    $qualityPer1k = (float)($riskConfig['quality_actions_per_1k'] ?? 35);
+    $qualityMinActions = (int)($riskConfig['quality_min_actions'] ?? 5);
+
+    $risks = [];
+    foreach ($mods as $mod) {
+        $activeHours = ((float)($mod['active_minutes'] ?? 0)) / 60;
+        if ($activeHours < $minHours) {
+            continue;
+        }
+
+        $prev = $prevMap[(int)$mod['user_id']] ?? null;
+        $prevConsistency = $prev ? (float)($prev['consistency_index'] ?? 0) : null;
+        $consistency = (float)($mod['consistency_index'] ?? 0);
+        $consistencyDropValue = $prevConsistency !== null ? ($prevConsistency - $consistency) : null;
+
+        $improvement = $mod['improvement'] ?? null;
+        $actions = (int)($mod['warnings'] ?? 0) + (int)($mod['mutes'] ?? 0) + (int)($mod['bans'] ?? 0);
+        $messages = (int)($mod['messages'] ?? 0);
+        $actionsPer1k = $messages > 0 ? ($actions / $messages) * 1000 : ($actions > 0 ? 999 : 0);
+        $qualityFlag = $actions >= $qualityMinActions && $actionsPer1k >= $qualityPer1k;
+
+        $consistencyFlag = $consistencyDropValue !== null && $consistencyDropValue >= $consistencyDrop;
+        $improvementFlag = $improvement !== null && $improvement <= $improvementDrop;
+
+        if (!$consistencyFlag && !$improvementFlag && !$qualityFlag) {
+            continue;
+        }
+
+        $risks[] = [
+            'name' => $mod['display_name'],
+            'active_hours' => $activeHours,
+            'consistency_drop' => $consistencyDropValue,
+            'improvement' => $improvement,
+        ];
+    }
+
+    usort($risks, fn($a, $b) => ($b['active_hours'] <=> $a['active_hours']));
+    return array_slice($risks, 0, 6);
+}
+
 $ownerIds = $config['owner_user_ids'] ?? [];
 $ownerIds = array_values(array_filter(array_map('intval', is_array($ownerIds) ? $ownerIds : [])));
 $managerIds = $config['manager_user_ids'] ?? [];
@@ -683,6 +738,26 @@ foreach ($rows as $row) {
                             $line = $badge['title'] . ': ' . $badge['name'];
                             if (!empty($badge['meta'])) {
                                 $line .= ' (' . $badge['meta'] . ')';
+                            }
+                            $lines[] = $line;
+                        }
+                    }
+
+                    $monthKey = $nowLocal->format('Y-m');
+                    $monthStats = $statsService->getMonthlyStats($chatId, $monthKey);
+                    $prevMonthKey = $nowLocal->modify('first day of last month')->format('Y-m');
+                    $prevMonthStats = $statsService->getMonthlyStats($chatId, $prevMonthKey);
+                    $burnoutRisks = buildBurnoutRisks($monthStats['mods'] ?? [], $prevMonthStats['mods'] ?? [], $config);
+                    if (!empty($burnoutRisks)) {
+                        $lines[] = '';
+                        $lines[] = '<b>Burnout Risk (MTD)</b>';
+                        foreach ($burnoutRisks as $risk) {
+                            $line = $risk['name'] . ' · ' . number_format((float)($risk['active_hours'] ?? 0), 1) . 'h';
+                            if (($risk['consistency_drop'] ?? null) !== null) {
+                                $line .= ' · Consistency -' . number_format((float)$risk['consistency_drop'], 1) . '%';
+                            }
+                            if (($risk['improvement'] ?? null) !== null && $risk['improvement'] < 0) {
+                                $line .= ' · Score ' . number_format((float)$risk['improvement'], 1) . '%';
                             }
                             $lines[] = $line;
                         }

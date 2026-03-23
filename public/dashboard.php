@@ -73,6 +73,121 @@ function buildRewardForecast(array $mtdBundle, array $lastBundle, float $budget,
     ];
 }
 
+function buildConflictRisks(array $mods, array $actionRiskMap, int $chatId, array $config): array
+{
+    if (empty($mods)) {
+        return [];
+    }
+
+    $riskConfig = $config['conflict_risk'] ?? [];
+    $highRiskChats = array_values(array_filter(array_map('intval', $riskConfig['high_risk_chat_ids'] ?? [])));
+    $isHighRisk = in_array($chatId, $highRiskChats, true);
+
+    $minActions = (int)($riskConfig['min_actions'] ?? 5);
+    $actionsPer1k = (float)($riskConfig['actions_per_1k'] ?? 35);
+    $newUserShare = (float)($riskConfig['new_user_share'] ?? 0.6);
+
+    if ($isHighRisk) {
+        $minActions = (int)($riskConfig['high_risk_min_actions'] ?? max(1, (int)round($minActions * 0.8)));
+        $actionsPer1k = (float)($riskConfig['high_risk_actions_per_1k'] ?? ($actionsPer1k * 0.8));
+        $newUserShare = (float)($riskConfig['high_risk_new_user_share'] ?? ($newUserShare * 0.85));
+    }
+
+    $risks = [];
+    foreach ($mods as $mod) {
+        $userId = (int)$mod['user_id'];
+        $messages = (int)($mod['messages'] ?? 0);
+        $actions = (int)($mod['warnings'] ?? 0) + (int)($mod['mutes'] ?? 0) + (int)($mod['bans'] ?? 0);
+        if ($actions < $minActions) {
+            continue;
+        }
+
+        $actionsPer1kValue = $messages > 0 ? ($actions / $messages) * 1000 : ($actions > 0 ? 999 : 0);
+        $riskRow = $actionRiskMap[$userId] ?? ['total_actions' => 0, 'new_user_actions' => 0];
+        $internalActions = (int)($riskRow['total_actions'] ?? 0);
+        $newUserActions = (int)($riskRow['new_user_actions'] ?? 0);
+        $newUserShareValue = $internalActions > 0 ? ($newUserActions / $internalActions) : 0;
+
+        if ($actionsPer1kValue < $actionsPer1k && $newUserShareValue < $newUserShare) {
+            continue;
+        }
+
+        $riskScore = max(
+            $actionsPer1k > 0 ? ($actionsPer1kValue / $actionsPer1k) : 0,
+            $newUserShare > 0 ? ($newUserShareValue / $newUserShare) : 0
+        );
+
+        $risks[] = [
+            'name' => $mod['display_name'],
+            'actions_per_1k' => $actionsPer1kValue,
+            'new_user_share' => $newUserShareValue,
+            'new_user_actions' => $newUserActions,
+            'actions' => $actions,
+            'risk_score' => $riskScore,
+        ];
+    }
+
+    usort($risks, fn($a, $b) => ($b['risk_score'] <=> $a['risk_score']) ?: ($b['actions_per_1k'] <=> $a['actions_per_1k']));
+    return array_slice($risks, 0, 6);
+}
+
+function buildBurnoutRisks(array $mods, array $prevMods, array $config): array
+{
+    if (empty($mods)) {
+        return [];
+    }
+
+    $prevMap = [];
+    foreach ($prevMods as $mod) {
+        $prevMap[(int)$mod['user_id']] = $mod;
+    }
+
+    $riskConfig = $config['burnout_risk'] ?? [];
+    $minHours = (float)($riskConfig['min_active_hours'] ?? 40);
+    $consistencyDrop = (float)($riskConfig['consistency_drop'] ?? 15);
+    $improvementDrop = (float)($riskConfig['improvement_drop'] ?? -10);
+    $qualityPer1k = (float)($riskConfig['quality_actions_per_1k'] ?? 35);
+    $qualityMinActions = (int)($riskConfig['quality_min_actions'] ?? 5);
+
+    $risks = [];
+    foreach ($mods as $mod) {
+        $activeHours = ((float)($mod['active_minutes'] ?? 0)) / 60;
+        if ($activeHours < $minHours) {
+            continue;
+        }
+
+        $prev = $prevMap[(int)$mod['user_id']] ?? null;
+        $prevConsistency = $prev ? (float)($prev['consistency_index'] ?? 0) : null;
+        $consistency = (float)($mod['consistency_index'] ?? 0);
+        $consistencyDropValue = $prevConsistency !== null ? ($prevConsistency - $consistency) : null;
+
+        $improvement = $mod['improvement'] ?? null;
+        $actions = (int)($mod['warnings'] ?? 0) + (int)($mod['mutes'] ?? 0) + (int)($mod['bans'] ?? 0);
+        $messages = (int)($mod['messages'] ?? 0);
+        $actionsPer1k = $messages > 0 ? ($actions / $messages) * 1000 : ($actions > 0 ? 999 : 0);
+        $qualityFlag = $actions >= $qualityMinActions && $actionsPer1k >= $qualityPer1k;
+
+        $consistencyFlag = $consistencyDropValue !== null && $consistencyDropValue >= $consistencyDrop;
+        $improvementFlag = $improvement !== null && $improvement <= $improvementDrop;
+
+        if (!$consistencyFlag && !$improvementFlag && !$qualityFlag) {
+            continue;
+        }
+
+        $risks[] = [
+            'name' => $mod['display_name'],
+            'active_hours' => $activeHours,
+            'consistency_drop' => $consistencyDropValue,
+            'improvement' => $improvement,
+            'actions_per_1k' => $actionsPer1k,
+            'actions' => $actions,
+        ];
+    }
+
+    usort($risks, fn($a, $b) => ($b['active_hours'] <=> $a['active_hours']));
+    return array_slice($risks, 0, 6);
+}
+
 $dashboardConfig = $config['dashboard'] ?? [];
 $token = $dashboardConfig['token'] ?? null;
 $provided = $_GET['token'] ?? ($_SERVER['HTTP_X_DASHBOARD_TOKEN'] ?? null);
@@ -526,6 +641,21 @@ if (!$isAll) {
     }
 } else {
     $rewardForecastNote = 'Forecast is available for single chat view only.';
+}
+
+$conflictRisks = [];
+$burnoutRisks = [];
+if (!$isAll) {
+    $modIds = array_map(static fn($mod) => (int)$mod['user_id'], $bundle['mods']);
+    $conflictConfig = $config['conflict_risk'] ?? [];
+    $newUserDays = (int)($conflictConfig['new_user_days'] ?? 7);
+    $actionRiskMap = $statsService->getActionRiskStats($chatId, $bundle['range'], $modIds, $newUserDays);
+    $conflictRisks = buildConflictRisks($bundle['mods'], $actionRiskMap, (int)$chatId, $config);
+
+    $prevMonthKey = $bundle['range']['month'] ?? ($nowLocal ?? new DateTimeImmutable('now', $tz))->format('Y-m');
+    $prevMonthKey = (new DateTimeImmutable($prevMonthKey . '-01', $tz))->modify('-1 month')->format('Y-m');
+    $prevBundle = $statsService->getMonthlyStats($chatId, $prevMonthKey);
+    $burnoutRisks = buildBurnoutRisks($bundle['mods'], $prevBundle['mods'] ?? [], $config);
 }
 
 $avgReward = $rewardedCount > 0 ? $rewardTotal / $rewardedCount : 0.0;
@@ -1394,6 +1524,47 @@ label.check {
                 <?php endforeach; ?>
                 <?php foreach (($bonusPlannerSummary['roles'] ?? []) as $role): ?>
                     <div class="subtext">Role <?php echo htmlspecialchars((string)($role['role'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>: <?php echo number_format((float)($role['amount'] ?? 0), 2); ?> (<?php echo (int)($role['count'] ?? 0); ?> mods)</div>
+                <?php endforeach; ?>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <div class="section-title">Risk Signals</div>
+    <div class="summary">
+        <div class="card">
+            <h3>Conflict / Spam Risk</h3>
+            <?php if ($isAll): ?>
+                <div class="subtext">Risk detectors are available in single chat view.</div>
+            <?php elseif (empty($conflictRisks)): ?>
+                <div class="subtext">No elevated conflict risks detected.</div>
+            <?php else: ?>
+                <?php foreach ($conflictRisks as $risk): ?>
+                    <div class="subtext">
+                        <?php echo htmlspecialchars($risk['name'] ?? 'Unknown', ENT_QUOTES, 'UTF-8'); ?>
+                        · <?php echo number_format((float)($risk['actions_per_1k'] ?? 0), 1); ?>/1k
+                        · New users <?php echo number_format((float)($risk['new_user_share'] ?? 0) * 100, 0); ?>%
+                    </div>
+                <?php endforeach; ?>
+            <?php endif; ?>
+        </div>
+        <div class="card">
+            <h3>Burnout Risk</h3>
+            <?php if ($isAll): ?>
+                <div class="subtext">Risk detectors are available in single chat view.</div>
+            <?php elseif (empty($burnoutRisks)): ?>
+                <div class="subtext">No burnout risks detected.</div>
+            <?php else: ?>
+                <?php foreach ($burnoutRisks as $risk): ?>
+                    <div class="subtext">
+                        <?php echo htmlspecialchars($risk['name'] ?? 'Unknown', ENT_QUOTES, 'UTF-8'); ?>
+                        · <?php echo number_format((float)($risk['active_hours'] ?? 0), 1); ?>h
+                        <?php if (($risk['consistency_drop'] ?? null) !== null): ?>
+                            · Consistency -<?php echo number_format((float)$risk['consistency_drop'], 1); ?>%
+                        <?php endif; ?>
+                        <?php if (($risk['improvement'] ?? null) !== null && $risk['improvement'] < 0): ?>
+                            · Score <?php echo number_format((float)$risk['improvement'], 1); ?>%
+                        <?php endif; ?>
+                    </div>
                 <?php endforeach; ?>
             <?php endif; ?>
         </div>

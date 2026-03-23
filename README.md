@@ -16,6 +16,8 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
 - Reward forecast (mid-month pace projection)
 - Budget optimizer (minimum budget for fairness targets)
 - Bonus split planner (badge/role bonus pools)
+- Conflict/spam risk detector (aggressive moderation vs new users)
+- Burnout risk alerts (high hours + dropping quality/consistency)
 - Role multipliers for senior/lead moderators
 - Insights: most active, most improved, most consistent, peak hour
 - Test payments (Telegram Stars / crypto)
