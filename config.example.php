@@ -90,6 +90,32 @@ return [
             'most_active' => 0.35,
             'most_improved' => 0.25,
         ],
+        // Bonus planner (optional): additional pool for badges/roles
+        'bonus_planner' => [
+            'pool_percent' => 0.0,
+            'badge_split' => [
+                'top_helper' => 0.3,
+                'most_balanced' => 0.25,
+                'consistency_king' => 0.25,
+                'fast_responder' => 0.2,
+            ],
+            'role_split' => [
+                'lead' => 0.5,
+                'senior' => 0.5,
+            ],
+        ],
+    ],
+
+    // Reward fairness targets for the budget optimizer (optional)
+    'reward_fairness' => [
+        'min_reward' => 0.0,
+    ],
+
+    // Forecast weights for reward pool pace projections (optional)
+    'forecast_weights' => [
+        'messages' => 1.0,
+        'actions' => 3.0,
+        'active_hours' => 0.5,
     ],
 
     // Role multipliers for score weighting (from /roster roles)

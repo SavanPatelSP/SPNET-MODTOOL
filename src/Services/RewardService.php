@@ -21,13 +21,6 @@ class RewardService
 
     public function rankAndReward(array $mods, float $budget, array $context = []): array
     {
-        $eligibility = $this->config['eligibility'] ?? [];
-        $minDays = (int)($eligibility['min_days_active'] ?? 0);
-        $minMessages = (int)($eligibility['min_messages'] ?? 0);
-        $minScore = (float)($eligibility['min_score'] ?? 0);
-        $minActions = (int)($eligibility['min_actions'] ?? 0);
-        $minActiveHours = (float)($eligibility['min_active_hours'] ?? 0);
-
         $rewardConfig = $this->config['reward'] ?? [];
         $topN = $rewardConfig['top_n'] ?? count($mods);
         $topN = min($topN, count($mods));
@@ -35,6 +28,8 @@ class RewardService
         $minReward = (float)($rewardConfig['min_reward'] ?? 0);
         $bonusPercent = (float)($rewardConfig['kpi_bonus_percent'] ?? 0);
         $bonusSplit = $rewardConfig['kpi_bonus_split'] ?? [];
+        $bonusPlanner = $rewardConfig['bonus_planner'] ?? [];
+        $plannerPercent = (float)($bonusPlanner['pool_percent'] ?? 0);
         $rankBy = strtolower((string)($rewardConfig['rank_by'] ?? 'score'));
         $scoreExponent = (float)($rewardConfig['score_exponent'] ?? 0.85);
         $baseStipendPercent = (float)($rewardConfig['base_stipend_percent'] ?? 0.1);
@@ -44,7 +39,9 @@ class RewardService
             'consistency' => 0.1,
         ];
         $bonusPool = $budget > 0 ? max(0.0, $budget * $bonusPercent) : 0.0;
-        $baseBudget = max(0.0, $budget - $bonusPool);
+        $plannerPool = $budget > 0 ? max(0.0, $budget * $plannerPercent) : 0.0;
+        $bonusTotal = $bonusPool + $plannerPool;
+        $baseBudget = max(0.0, $budget - $bonusTotal);
 
         $premium = (bool)($context['premium'] ?? false);
         $premiumReward = $this->config['premium']['reward'] ?? [];
@@ -52,33 +49,7 @@ class RewardService
         $penaltyWeight = (float)($premiumReward['penalty_weight'] ?? 0);
         $penaltyDecay = (float)($premiumReward['penalty_decay'] ?? 0.5);
 
-        $eligible = [];
-        foreach ($mods as $mod) {
-            $isEligible = true;
-            if ($minDays > 0 && ($mod['days_active'] ?? 0) < $minDays) {
-                $isEligible = false;
-            }
-            if ($minMessages > 0 && ($mod['messages'] ?? 0) < $minMessages) {
-                $isEligible = false;
-            }
-            if ($minScore > 0 && ($mod['score'] ?? 0) < $minScore) {
-                $isEligible = false;
-            }
-            if ($minActions > 0) {
-                $actions = (int)(($mod['warnings'] ?? 0) + ($mod['mutes'] ?? 0) + ($mod['bans'] ?? 0));
-                if ($actions < $minActions) {
-                    $isEligible = false;
-                }
-            }
-            if ($minActiveHours > 0) {
-                $hours = ((float)($mod['active_minutes'] ?? 0)) / 60;
-                if ($hours < $minActiveHours) {
-                    $isEligible = false;
-                }
-            }
-            $mod['eligible'] = $isEligible;
-            $eligible[] = $mod;
-        }
+        $eligible = $this->applyEligibility($mods);
 
         $eligibleForRanges = array_values(array_filter($eligible, static fn(array $mod): bool => !empty($mod['eligible'])));
         if (empty($eligibleForRanges)) {
@@ -115,6 +86,12 @@ class RewardService
         }
 
         $bonusMap = $this->buildBonusMap($eligible, $bonusPool, $bonusSplit);
+        $plannerBonusMap = $this->buildPlannerBonusMap($eligible, $plannerPool, $bonusPlanner);
+        if (!empty($plannerBonusMap)) {
+            foreach ($plannerBonusMap as $userId => $amount) {
+                $bonusMap[$userId] = ($bonusMap[$userId] ?? 0) + $amount;
+            }
+        }
 
         $adjustedScores = [];
         $adjustedMap = [];
@@ -211,6 +188,7 @@ class RewardService
             $budget,
             $baseBudget,
             $bonusPool,
+            $plannerPool,
             $topN,
             $scoreExponent,
             $baseStipendPercent,
@@ -230,12 +208,13 @@ class RewardService
         float $budget,
         float $baseBudget,
         float $bonusPool,
+        float $plannerPool,
         int $topN,
         float $scoreExponent,
         float $baseStipendPercent,
         float $minReward
     ): void {
-        if ($this->audit === null || empty($this->auditConfig['score_log_enabled'])) {
+        if (!$this->shouldLogAudit($context)) {
             return;
         }
 
@@ -288,7 +267,9 @@ class RewardService
             'month' => $context['month'] ?? null,
             'budget' => $budget,
             'base_budget' => $baseBudget,
-            'bonus_pool' => $bonusPool,
+            'bonus_pool' => $bonusPool + $plannerPool,
+            'kpi_bonus_pool' => $bonusPool,
+            'planner_bonus_pool' => $plannerPool,
             'rank_by' => $rankBy,
             'score_exponent' => $scoreExponent,
             'base_stipend_percent' => $baseStipendPercent,
@@ -302,6 +283,168 @@ class RewardService
         ];
 
         $this->audit->log('score_calc', $actorId, $chatId, $meta);
+    }
+
+    public function estimateMinimumBudget(array $mods, float $currentBudget, float $targetMinReward, array $context = []): array
+    {
+        $eligible = array_values(array_filter($this->applyEligibility($mods), static function (array $mod): bool {
+            return !empty($mod['eligible']);
+        }));
+
+        if ($targetMinReward <= 0) {
+            return [
+                'status' => 'disabled',
+                'eligible' => count($eligible),
+                'min_budget' => 0.0,
+                'min_reward' => 0.0,
+            ];
+        }
+
+        if (empty($eligible)) {
+            return [
+                'status' => 'no_eligible',
+                'eligible' => 0,
+                'min_budget' => 0.0,
+                'min_reward' => 0.0,
+            ];
+        }
+
+        $currentBudget = max(0.0, $currentBudget);
+        $context['disable_audit'] = true;
+
+        $high = max($currentBudget, $targetMinReward * count($eligible));
+        $minAtHigh = $this->minRewardForBudget($mods, $high, $context);
+
+        $attempts = 0;
+        while ($minAtHigh < $targetMinReward && $attempts < 8) {
+            $high *= 1.5;
+            $minAtHigh = $this->minRewardForBudget($mods, $high, $context);
+            $attempts++;
+        }
+
+        if ($minAtHigh < $targetMinReward) {
+            return [
+                'status' => 'unreachable',
+                'eligible' => count($eligible),
+                'min_budget' => round($high, 2),
+                'min_reward' => round($minAtHigh, 2),
+            ];
+        }
+
+        $low = 0.0;
+        $upper = $high;
+        for ($i = 0; $i < 18; $i++) {
+            $mid = ($low + $upper) / 2;
+            $minAtMid = $this->minRewardForBudget($mods, $mid, $context);
+            if ($minAtMid >= $targetMinReward) {
+                $upper = $mid;
+            } else {
+                $low = $mid;
+            }
+        }
+
+        $minAtUpper = $this->minRewardForBudget($mods, $upper, $context);
+
+        return [
+            'status' => 'ok',
+            'eligible' => count($eligible),
+            'min_budget' => round($upper, 2),
+            'min_reward' => round($minAtUpper, 2),
+        ];
+    }
+
+    public function buildBonusPlannerSummary(array $mods, float $budget): array
+    {
+        $rewardConfig = $this->config['reward'] ?? [];
+        $bonusPlanner = $rewardConfig['bonus_planner'] ?? [];
+        $plannerPercent = (float)($bonusPlanner['pool_percent'] ?? 0);
+        $plannerPool = $budget > 0 ? max(0.0, $budget * $plannerPercent) : 0.0;
+        $badgeSplit = $bonusPlanner['badge_split'] ?? [];
+        $roleSplit = $bonusPlanner['role_split'] ?? [];
+
+        $splitTotal = 0.0;
+        foreach ($badgeSplit as $value) {
+            $splitTotal += (float)$value;
+        }
+        foreach ($roleSplit as $value) {
+            $splitTotal += (float)$value;
+        }
+
+        $eligible = array_values(array_filter($this->applyEligibility($mods), static function (array $mod): bool {
+            return !empty($mod['eligible']);
+        }));
+
+        $winners = $this->computeBadgeWinners($eligible);
+        $badgeSummary = [];
+        foreach ($badgeSplit as $key => $value) {
+            $split = (float)$value;
+            if ($split <= 0) {
+                continue;
+            }
+            $winner = $winners[$key] ?? null;
+            $amount = ($plannerPool > 0 && $splitTotal > 0) ? $plannerPool * ($split / $splitTotal) : 0.0;
+            $badgeSummary[] = [
+                'key' => $key,
+                'split' => $split,
+                'amount' => round($amount, 2),
+                'winner' => $winner ? ($winner['display_name'] ?? 'Unknown') : null,
+            ];
+        }
+
+        $roleSummary = [];
+        foreach ($roleSplit as $role => $value) {
+            $split = (float)$value;
+            if ($split <= 0) {
+                continue;
+            }
+            $roleKey = strtolower(trim((string)$role));
+            $members = array_values(array_filter($eligible, static function (array $mod) use ($roleKey): bool {
+                $roleValue = strtolower(trim((string)($mod['role'] ?? '')));
+                return $roleValue !== '' && $roleValue === $roleKey;
+            }));
+            $amount = ($plannerPool > 0 && $splitTotal > 0) ? $plannerPool * ($split / $splitTotal) : 0.0;
+            $perMod = (!empty($members) && $amount > 0) ? $amount / count($members) : 0.0;
+            $roleSummary[] = [
+                'role' => (string)$role,
+                'split' => $split,
+                'amount' => round($amount, 2),
+                'count' => count($members),
+                'per_mod' => round($perMod, 2),
+            ];
+        }
+
+        return [
+            'pool_percent' => $plannerPercent,
+            'pool_amount' => round($plannerPool, 2),
+            'split_total' => $splitTotal,
+            'badges' => $badgeSummary,
+            'roles' => $roleSummary,
+        ];
+    }
+
+    private function minRewardForBudget(array $mods, float $budget, array $context): float
+    {
+        $ranked = $this->rankAndReward($mods, $budget, $context);
+        $min = null;
+        foreach ($ranked as $mod) {
+            if (empty($mod['eligible'])) {
+                continue;
+            }
+            $reward = (float)($mod['reward'] ?? 0);
+            $min = $min === null ? $reward : min($min, $reward);
+        }
+        return $min ?? 0.0;
+    }
+
+    private function shouldLogAudit(array $context): bool
+    {
+        if ($this->audit === null || empty($this->auditConfig['score_log_enabled'])) {
+            return false;
+        }
+        if (!empty($context['disable_audit'])) {
+            return false;
+        }
+        return true;
     }
 
     private function buildBonusMap(array $mods, float $bonusPool, array $bonusSplit): array
@@ -362,6 +505,219 @@ class RewardService
         }
 
         return $bonusMap;
+    }
+
+    private function buildPlannerBonusMap(array $mods, float $plannerPool, array $plannerConfig): array
+    {
+        if ($plannerPool <= 0) {
+            return [];
+        }
+
+        $badgeSplit = $plannerConfig['badge_split'] ?? [];
+        $roleSplit = $plannerConfig['role_split'] ?? [];
+        $splitTotal = 0.0;
+        foreach ($badgeSplit as $value) {
+            $splitTotal += (float)$value;
+        }
+        foreach ($roleSplit as $value) {
+            $splitTotal += (float)$value;
+        }
+        if ($splitTotal <= 0) {
+            return [];
+        }
+
+        $eligible = array_values(array_filter($mods, static function (array $mod): bool {
+            return !empty($mod['eligible']);
+        }));
+        if (empty($eligible)) {
+            return [];
+        }
+
+        $winners = $this->computeBadgeWinners($eligible);
+        $bonusMap = [];
+
+        foreach ($badgeSplit as $key => $splitValue) {
+            $split = (float)$splitValue;
+            if ($split <= 0) {
+                continue;
+            }
+            $winner = $winners[$key] ?? null;
+            if (!$winner) {
+                continue;
+            }
+            $amount = $plannerPool * ($split / $splitTotal);
+            $userId = (int)$winner['user_id'];
+            $bonusMap[$userId] = ($bonusMap[$userId] ?? 0) + $amount;
+        }
+
+        foreach ($roleSplit as $role => $splitValue) {
+            $split = (float)$splitValue;
+            if ($split <= 0) {
+                continue;
+            }
+            $roleKey = strtolower(trim((string)$role));
+            $members = array_values(array_filter($eligible, static function (array $mod) use ($roleKey): bool {
+                $roleValue = strtolower(trim((string)($mod['role'] ?? '')));
+                return $roleValue !== '' && $roleValue === $roleKey;
+            }));
+            if (empty($members)) {
+                continue;
+            }
+            $amount = $plannerPool * ($split / $splitTotal);
+            $perMod = $amount / count($members);
+            foreach ($members as $member) {
+                $userId = (int)$member['user_id'];
+                $bonusMap[$userId] = ($bonusMap[$userId] ?? 0) + $perMod;
+            }
+        }
+
+        return $bonusMap;
+    }
+
+    private function computeBadgeWinners(array $mods): array
+    {
+        if (empty($mods)) {
+            return [];
+        }
+
+        $weights = $this->config['score_weights'] ?? [];
+        $fastMinMessages = 15;
+        $fastMinHours = 1.0;
+        $balancedMinMessages = 15;
+        $balancedMinActions = 1;
+
+        $topHelper = null;
+        $topHelperMessages = -1;
+        $consistencyKing = null;
+        $consistencyMax = -1.0;
+        $fastResponder = null;
+        $fastRate = null;
+        $fastFallback = null;
+        $fastFallbackRate = null;
+        $mostBalanced = null;
+        $mostBalancedScore = null;
+        $balancedFallback = null;
+        $balancedFallbackScore = null;
+
+        foreach ($mods as $mod) {
+            $messages = (int)($mod['messages'] ?? 0);
+            if ($messages > $topHelperMessages) {
+                $topHelperMessages = $messages;
+                $topHelper = $mod;
+            }
+            $consistency = (float)($mod['consistency_index'] ?? 0);
+            if ($consistency > $consistencyMax) {
+                $consistencyMax = $consistency;
+                $consistencyKing = $mod;
+            }
+
+            $activeMinutes = (float)($mod['active_minutes'] ?? 0);
+            $hours = $activeMinutes / 60;
+            if ($messages > 0 && $hours > 0) {
+                $rate = $messages / $hours;
+                if ($messages >= $fastMinMessages && $hours >= $fastMinHours) {
+                    if ($fastRate === null || $rate > $fastRate) {
+                        $fastRate = $rate;
+                        $fastResponder = $mod;
+                    }
+                } else {
+                    if ($fastFallbackRate === null || $rate > $fastFallbackRate) {
+                        $fastFallbackRate = $rate;
+                        $fastFallback = $mod;
+                    }
+                }
+            }
+
+            $warnings = (int)($mod['warnings'] ?? 0);
+            $mutes = (int)($mod['mutes'] ?? 0);
+            $bans = (int)($mod['bans'] ?? 0);
+            $actions = $warnings + $mutes + $bans;
+            $daysActive = (int)($mod['days_active'] ?? 0);
+            $roleMultiplier = (float)($mod['role_multiplier'] ?? 1.0);
+
+            $chatScore = 0.0;
+            $chatScore += log(1 + $messages) * ($weights['message'] ?? 1.0);
+            $chatScore += sqrt($activeMinutes) * ($weights['active_minute'] ?? 0.0);
+            $chatScore += $daysActive * ($weights['day_active'] ?? 0.0);
+            $chatScore *= $roleMultiplier;
+
+            $actionScore = 0.0;
+            $actionScore += $warnings * ($weights['warn'] ?? 1.0);
+            $actionScore += $mutes * ($weights['mute'] ?? 1.0);
+            $actionScore += $bans * ($weights['ban'] ?? 1.0);
+            $actionScore *= $roleMultiplier;
+
+            if ($chatScore > 0 && $actionScore > 0) {
+                $balanceRatio = 1 - (abs($chatScore - $actionScore) / max($chatScore, $actionScore, 1.0));
+                $score = ($chatScore + $actionScore) * $balanceRatio;
+
+                if ($messages >= $balancedMinMessages && $actions >= $balancedMinActions) {
+                    if ($mostBalancedScore === null || $score > $mostBalancedScore) {
+                        $mostBalancedScore = $score;
+                        $mostBalanced = $mod;
+                    }
+                } else {
+                    if ($balancedFallbackScore === null || $score > $balancedFallbackScore) {
+                        $balancedFallbackScore = $score;
+                        $balancedFallback = $mod;
+                    }
+                }
+            }
+        }
+
+        if ($fastResponder === null && $fastFallback !== null) {
+            $fastResponder = $fastFallback;
+        }
+        if ($mostBalanced === null && $balancedFallback !== null) {
+            $mostBalanced = $balancedFallback;
+        }
+
+        return [
+            'top_helper' => $topHelper,
+            'most_balanced' => $mostBalanced,
+            'consistency_king' => $consistencyKing,
+            'fast_responder' => $fastResponder,
+        ];
+    }
+
+    private function applyEligibility(array $mods): array
+    {
+        $eligibility = $this->config['eligibility'] ?? [];
+        $minDays = (int)($eligibility['min_days_active'] ?? 0);
+        $minMessages = (int)($eligibility['min_messages'] ?? 0);
+        $minScore = (float)($eligibility['min_score'] ?? 0);
+        $minActions = (int)($eligibility['min_actions'] ?? 0);
+        $minActiveHours = (float)($eligibility['min_active_hours'] ?? 0);
+
+        $eligible = [];
+        foreach ($mods as $mod) {
+            $isEligible = true;
+            if ($minDays > 0 && ($mod['days_active'] ?? 0) < $minDays) {
+                $isEligible = false;
+            }
+            if ($minMessages > 0 && ($mod['messages'] ?? 0) < $minMessages) {
+                $isEligible = false;
+            }
+            if ($minScore > 0 && ($mod['score'] ?? 0) < $minScore) {
+                $isEligible = false;
+            }
+            if ($minActions > 0) {
+                $actions = (int)(($mod['warnings'] ?? 0) + ($mod['mutes'] ?? 0) + ($mod['bans'] ?? 0));
+                if ($actions < $minActions) {
+                    $isEligible = false;
+                }
+            }
+            if ($minActiveHours > 0) {
+                $hours = ((float)($mod['active_minutes'] ?? 0)) / 60;
+                if ($hours < $minActiveHours) {
+                    $isEligible = false;
+                }
+            }
+            $mod['eligible'] = $isEligible;
+            $eligible[] = $mod;
+        }
+
+        return $eligible;
     }
 
     private function applyRewardCap(array $rewards, float $budget, float $maxShare): array

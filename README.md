@@ -13,6 +13,9 @@ Tracks moderator activity in Telegram groups and generates monthly reward sheets
 - Performance badges (Top Helper / Most Balanced / Consistency King / Fast Responder)
 - Approval workflow + audit log exports
 - Audit scoring logs (every reward calculation recorded)
+- Reward forecast (mid-month pace projection)
+- Budget optimizer (minimum budget for fairness targets)
+- Bonus split planner (badge/role bonus pools)
 - Role multipliers for senior/lead moderators
 - Insights: most active, most improved, most consistent, peak hour
 - Test payments (Telegram Stars / crypto)

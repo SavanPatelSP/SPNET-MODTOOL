@@ -171,6 +171,24 @@ if ($teamHealthScore >= 80) {
 }
 
 $performanceBadges = buildPerformanceBadges($bundle['mods'], $config);
+$bonusPlannerSummary = $rewardService->buildBonusPlannerSummary($bundle['mods'], $budget);
+$fairnessConfig = $config['reward_fairness'] ?? [];
+$targetMinReward = (float)($fairnessConfig['min_reward'] ?? ($config['reward']['min_reward'] ?? 0));
+$budgetOptimizer = $rewardService->estimateMinimumBudget($bundle['mods'], $budget, $targetMinReward, $context);
+
+$nowLocal = new DateTimeImmutable('now', $tz);
+$currentMonthKey = $nowLocal->format('Y-m');
+$targetMonthKey = $range['month'] ?? $month ?? $currentMonthKey;
+$rewardForecast = null;
+$rewardForecastNote = null;
+if ($targetMonthKey === $currentMonthKey) {
+    $mtdBundle = $statsService->getMonthToDateStats($chatId, $nowLocal);
+    $lastMonthKey = $nowLocal->modify('first day of last month')->format('Y-m');
+    $lastBundle = $statsService->getMonthlyStats($chatId, $lastMonthKey);
+    $rewardForecast = buildRewardForecast($mtdBundle, $lastBundle, $budget, $config);
+} else {
+    $rewardForecastNote = 'Forecast is available for the current month only.';
+}
 
 function percentDrop(?float $current, ?float $previous): ?float
 {
@@ -385,6 +403,70 @@ function buildPerformanceBadges(array $mods, array $config): array
     }
 
     return $badges;
+}
+
+function buildActivityIndex(array $summary, array $weights): float
+{
+    $messages = (float)($summary['messages'] ?? 0);
+    $actions = (float)($summary['warnings'] ?? 0) + (float)($summary['mutes'] ?? 0) + (float)($summary['bans'] ?? 0);
+    $activeHours = ((float)($summary['active_minutes'] ?? 0)) / 60;
+
+    $defaults = [
+        'messages' => 1.0,
+        'actions' => 3.0,
+        'active_hours' => 0.5,
+    ];
+    $weights = array_merge($defaults, is_array($weights) ? $weights : []);
+
+    return ($messages * (float)$weights['messages'])
+        + ($actions * (float)$weights['actions'])
+        + ($activeHours * (float)$weights['active_hours']);
+}
+
+function buildRewardForecast(array $mtdBundle, array $lastBundle, float $budget, array $config): array
+{
+    $forecastWeights = $config['forecast_weights'] ?? [];
+    $mtdSummary = $mtdBundle['summary'] ?? [];
+    $lastSummary = $lastBundle['summary'] ?? [];
+
+    $currentIndex = buildActivityIndex($mtdSummary, $forecastWeights);
+    $baselineIndex = buildActivityIndex($lastSummary, $forecastWeights);
+
+    $range = $mtdBundle['range'] ?? [];
+    $startLocal = $range['start_local'] ?? null;
+    $endLocal = $range['end_local'] ?? null;
+    if (!$startLocal instanceof DateTimeImmutable || !$endLocal instanceof DateTimeImmutable) {
+        return [
+            'status' => 'invalid_range',
+        ];
+    }
+
+    $daysElapsed = max(1, (int)$startLocal->diff($endLocal)->days + 1);
+    $daysTotal = max(1, (int)$startLocal->diff($startLocal->modify('first day of next month'))->days);
+    $paceFactor = $daysTotal / $daysElapsed;
+
+    $projectedMessages = (float)($mtdSummary['messages'] ?? 0) * $paceFactor;
+    $projectedActions = ((float)($mtdSummary['warnings'] ?? 0) + (float)($mtdSummary['mutes'] ?? 0) + (float)($mtdSummary['bans'] ?? 0)) * $paceFactor;
+    $projectedActiveHours = (((float)($mtdSummary['active_minutes'] ?? 0)) / 60) * $paceFactor;
+    $projectedIndex = $currentIndex * $paceFactor;
+
+    $baselineIndex = $baselineIndex > 0 ? $baselineIndex : ($currentIndex > 0 ? $currentIndex : 1.0);
+    $forecastBudget = $budget > 0 ? $budget * ($projectedIndex / $baselineIndex) : 0.0;
+    $deltaPct = $budget > 0 ? (($forecastBudget - $budget) / $budget) * 100 : 0.0;
+
+    return [
+        'status' => 'ok',
+        'days_elapsed' => $daysElapsed,
+        'days_total' => $daysTotal,
+        'pace_factor' => $paceFactor,
+        'projected_messages' => $projectedMessages,
+        'projected_actions' => $projectedActions,
+        'projected_active_hours' => $projectedActiveHours,
+        'projected_index' => $projectedIndex,
+        'baseline_index' => $baselineIndex,
+        'forecast_budget' => $forecastBudget,
+        'delta_pct' => $deltaPct,
+    ];
 }
 
 $spikeDefaults = $config['inactivity_spike_defaults'] ?? [];
@@ -813,6 +895,76 @@ th {
                             <?php if (!empty($badge['meta'])): ?>
                                 <span class="muted">(<?php echo htmlspecialchars($badge['meta'], ENT_QUOTES, 'UTF-8'); ?>)</span>
                             <?php endif; ?>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <div class="grid">
+        <div class="card">
+            <div class="section-title">Reward Forecast (MTD)</div>
+            <?php if (empty($rewardForecast) || ($rewardForecast['status'] ?? '') !== 'ok'): ?>
+                <div class="muted"><?php echo htmlspecialchars($rewardForecastNote ?? 'Forecast unavailable.', ENT_QUOTES, 'UTF-8'); ?></div>
+            <?php else: ?>
+                <div class="value"><?php echo number_format((float)$rewardForecast['forecast_budget'], 2); ?></div>
+                <div class="muted">Estimated pool at current pace · Day <?php echo (int)$rewardForecast['days_elapsed']; ?>/<?php echo (int)$rewardForecast['days_total']; ?></div>
+                <div class="list">
+                    <div>Projected msgs <?php echo number_format((float)$rewardForecast['projected_messages']); ?></div>
+                    <div>Projected actions <?php echo number_format((float)$rewardForecast['projected_actions']); ?></div>
+                    <div>Projected active <?php echo number_format((float)$rewardForecast['projected_active_hours'], 1); ?>h</div>
+                    <div class="muted"><?php echo (($rewardForecast['delta_pct'] ?? 0) >= 0 ? '+' : '') . number_format((float)($rewardForecast['delta_pct'] ?? 0), 1); ?>% vs current budget</div>
+                </div>
+            <?php endif; ?>
+        </div>
+
+        <div class="card">
+            <div class="section-title">Budget Optimizer</div>
+            <?php if (($budgetOptimizer['status'] ?? '') === 'disabled'): ?>
+                <div class="muted">Set reward_fairness.min_reward to enable.</div>
+            <?php elseif (($budgetOptimizer['status'] ?? '') === 'no_eligible'): ?>
+                <div class="muted">No eligible mods yet.</div>
+            <?php elseif (($budgetOptimizer['status'] ?? '') === 'unreachable'): ?>
+                <div class="list">
+                    <div>Min target <?php echo number_format($targetMinReward, 2); ?> per mod</div>
+                    <div class="muted">Even <?php echo number_format((float)($budgetOptimizer['min_budget'] ?? 0), 2); ?> only yields <?php echo number_format((float)($budgetOptimizer['min_reward'] ?? 0), 2); ?></div>
+                </div>
+            <?php else: ?>
+                <?php
+                    $optBudget = (float)($budgetOptimizer['min_budget'] ?? 0);
+                    $deltaPct = $budget > 0 ? (($optBudget - $budget) / $budget) * 100 : 0;
+                ?>
+                <div class="value"><?php echo number_format($optBudget, 2); ?></div>
+                <div class="muted">Min budget for <?php echo number_format($targetMinReward, 2); ?> per eligible mod</div>
+                <div class="list">
+                    <div>Eligible mods <?php echo (int)($budgetOptimizer['eligible'] ?? 0); ?></div>
+                    <div class="muted"><?php echo ($deltaPct >= 0 ? '+' : '') . number_format($deltaPct, 1); ?>% vs current budget</div>
+                </div>
+            <?php endif; ?>
+        </div>
+
+        <div class="card">
+            <div class="section-title">Bonus Split Planner</div>
+            <?php if (empty($bonusPlannerSummary) || (float)($bonusPlannerSummary['pool_amount'] ?? 0) <= 0): ?>
+                <div class="muted">No bonus planner pool configured.</div>
+            <?php else: ?>
+                <div class="list">
+                    <div>Pool <?php echo number_format((float)($bonusPlannerSummary['pool_amount'] ?? 0), 2); ?> (<?php echo number_format(((float)($bonusPlannerSummary['pool_percent'] ?? 0)) * 100, 1); ?>%)</div>
+                    <?php foreach (($bonusPlannerSummary['badges'] ?? []) as $badge): ?>
+                        <div>
+                            <?php echo htmlspecialchars(ucwords(str_replace('_', ' ', (string)($badge['key'] ?? ''))), ENT_QUOTES, 'UTF-8'); ?>:
+                            <?php echo number_format((float)($badge['amount'] ?? 0), 2); ?>
+                            <?php if (!empty($badge['winner'])): ?>
+                                <span class="muted">(<?php echo htmlspecialchars((string)$badge['winner'], ENT_QUOTES, 'UTF-8'); ?>)</span>
+                            <?php endif; ?>
+                        </div>
+                    <?php endforeach; ?>
+                    <?php foreach (($bonusPlannerSummary['roles'] ?? []) as $role): ?>
+                        <div>
+                            Role <?php echo htmlspecialchars((string)($role['role'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>:
+                            <?php echo number_format((float)($role['amount'] ?? 0), 2); ?>
+                            <span class="muted">(<?php echo (int)($role['count'] ?? 0); ?> mods · <?php echo number_format((float)($role['per_mod'] ?? 0), 2); ?>/mod)</span>
                         </div>
                     <?php endforeach; ?>
                 </div>
