@@ -675,50 +675,66 @@ if ($renderPdf) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title><?php echo htmlspecialchars($brand, ENT_QUOTES, 'UTF-8'); ?> Manager Digest</title>
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap');
 :root {
     --accent: <?php echo $accent; ?>;
     --secondary: <?php echo $secondary; ?>;
-    --muted: #64748b;
-    --border: #e2e8f0;
+    --ink: #111827;
+    --muted: #667085;
+    --muted-strong: #475467;
+    --border: #e4e7ec;
     --surface: #ffffff;
-    --shadow: 0 20px 45px rgba(15, 23, 42, 0.08);
+    --surface-soft: #f8fafc;
+    --shadow-lg: 0 28px 60px rgba(15, 23, 42, 0.14);
+    --shadow: 0 14px 32px rgba(15, 23, 42, 0.08);
+    --radius-xl: 24px;
+    --radius-lg: 18px;
+    --radius-md: 14px;
+    --radius-sm: 10px;
 }
 * { box-sizing: border-box; }
 body {
     margin: 0;
-    font-family: "Avenir Next", "Avenir", "Trebuchet MS", Verdana, sans-serif;
-    background: radial-gradient(circle at top right, #fef6ed 0%, #e6f2ff 45%, #f8fafc 100%);
-    color: var(--secondary);
+    font-family: "Source Sans 3", "Segoe UI", Tahoma, sans-serif;
+    background:
+        radial-gradient(900px 420px at 96% -10%, rgba(255, 223, 186, 0.9), rgba(255, 223, 186, 0) 70%),
+        radial-gradient(720px 520px at -5% 12%, rgba(190, 238, 255, 0.9), rgba(190, 238, 255, 0) 68%),
+        #f5f7fb;
+    color: var(--ink);
+}
+h1, h2, h3, h4 {
+    font-family: "Sora", "Source Sans 3", sans-serif;
+    letter-spacing: -0.01em;
 }
 .container {
     max-width: 1180px;
-    margin: 28px auto 60px;
-    padding: 0 20px;
+    margin: 32px auto 70px;
+    padding: 0 22px;
 }
 .hero {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: 18px;
+    gap: 20px;
     align-items: center;
-    background: var(--surface);
-    border-radius: 18px;
-    padding: 20px 24px;
-    box-shadow: var(--shadow);
-    border: 1px solid #eef2f7;
+    padding: 22px 24px;
+    border-radius: var(--radius-xl);
+    background: linear-gradient(120deg, rgba(255, 255, 255, 0.96), rgba(255, 244, 230, 0.9));
+    border: 1px solid rgba(255, 255, 255, 0.8);
+    box-shadow: var(--shadow-lg);
 }
 .kicker {
     font-size: 11px;
-    letter-spacing: 0.14em;
+    letter-spacing: 0.18em;
     text-transform: uppercase;
     color: var(--muted);
 }
 .hero h1 {
     margin: 6px 0 8px;
-    font-size: 24px;
+    font-size: 26px;
 }
 .meta {
-    font-size: 12px;
-    color: var(--muted);
+    font-size: 13px;
+    color: var(--muted-strong);
 }
 .chips {
     display: flex;
@@ -727,20 +743,21 @@ body {
     margin-top: 12px;
 }
 .chip {
-    background: #f1f5f9;
-    border: 1px solid var(--border);
+    background: rgba(17, 24, 39, 0.04);
+    border: 1px solid rgba(148, 163, 184, 0.35);
     border-radius: 999px;
-    padding: 6px 10px;
+    padding: 6px 12px;
     font-size: 12px;
     font-weight: 600;
+    color: var(--muted-strong);
 }
 .panel {
     background: var(--surface);
-    border-radius: 16px;
-    padding: 16px 20px;
+    border-radius: var(--radius-lg);
+    padding: 18px 20px;
     margin-top: 18px;
     box-shadow: var(--shadow);
-    border: 1px solid #eef2f7;
+    border: 1px solid rgba(148, 163, 184, 0.2);
 }
 .control-grid {
     display: grid;
@@ -756,25 +773,30 @@ label {
     color: var(--muted);
 }
 select, input {
-    padding: 9px 10px;
-    border-radius: 10px;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
     border: 1px solid var(--border);
     font-size: 13px;
-    color: var(--secondary);
-    background: #f8fafc;
+    color: var(--ink);
+    background: #fbfcfe;
 }
 .button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 8px 12px;
-    border-radius: 10px;
-    border: 1px solid var(--border);
+    padding: 9px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.4);
     text-decoration: none;
     font-size: 12px;
     font-weight: 600;
-    color: var(--secondary);
+    color: var(--ink);
     background: #fff;
+    transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+.button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 10px 20px rgba(15, 23, 42, 0.08);
 }
 .button.primary {
     background: var(--accent);
@@ -789,17 +811,17 @@ select, input {
 }
 .card {
     background: var(--surface);
-    border-radius: 14px;
+    border-radius: var(--radius-md);
     padding: 16px;
     box-shadow: var(--shadow);
-    border: 1px solid #eff2f5;
+    border: 1px solid rgba(148, 163, 184, 0.15);
 }
 .card h3 {
     margin: 0 0 8px;
     font-size: 11px;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: #9a3412;
+    letter-spacing: 0.12em;
+    color: #b45309;
 }
 .card .value {
     font-size: 22px;
@@ -813,9 +835,9 @@ select, input {
 }
 .section-title {
     margin: 0 0 10px;
-    font-size: 14px;
+    font-size: 12px;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.12em;
     color: var(--muted);
 }
 table {
@@ -889,6 +911,16 @@ th {
     font-size: 11px;
     color: var(--muted);
     margin-top: 8px;
+}
+@keyframes rise {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.hero, .panel, .summary .card, .card {
+    animation: rise 0.5s ease both;
+}
+@media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
 }
 @media (max-width: 900px) {
     .hero {

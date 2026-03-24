@@ -825,69 +825,97 @@ $colCount = $compact ? 14 : 17;
 <?php endif; ?>
 <title><?php echo htmlspecialchars($brand, ENT_QUOTES, 'UTF-8'); ?> Dashboard</title>
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap');
 :root {
     --accent: <?php echo $accent; ?>;
     --secondary: <?php echo $secondary; ?>;
-    --muted: #64748b;
-    --border: #e2e8f0;
+    --ink: #111827;
+    --muted: #667085;
+    --muted-strong: #475467;
+    --border: #e4e7ec;
     --surface: #ffffff;
-    --shadow: 0 20px 45px rgba(15, 23, 42, 0.08);
+    --surface-soft: #f8fafc;
+    --shadow-lg: 0 28px 60px rgba(15, 23, 42, 0.14);
+    --shadow: 0 14px 32px rgba(15, 23, 42, 0.08);
+    --radius-xl: 24px;
+    --radius-lg: 18px;
+    --radius-md: 14px;
+    --radius-sm: 10px;
 }
 * { box-sizing: border-box; }
 body {
     margin: 0;
-    font-family: "Avenir Next", "Avenir", "Trebuchet MS", Verdana, sans-serif;
-    background: radial-gradient(circle at top right, #fef6ed 0%, #e6f2ff 45%, #f8fafc 100%);
-    color: var(--secondary);
+    font-family: "Source Sans 3", "Segoe UI", Tahoma, sans-serif;
+    background:
+        radial-gradient(900px 420px at 96% -10%, rgba(255, 223, 186, 0.9), rgba(255, 223, 186, 0) 70%),
+        radial-gradient(720px 520px at -5% 12%, rgba(190, 238, 255, 0.9), rgba(190, 238, 255, 0) 68%),
+        #f5f7fb;
+    color: var(--ink);
+}
+h1, h2, h3, h4 {
+    font-family: "Sora", "Source Sans 3", sans-serif;
+    letter-spacing: -0.01em;
 }
 .container {
-    max-width: 1250px;
-    margin: 28px auto 60px;
-    padding: 0 20px;
+    max-width: 1260px;
+    margin: 32px auto 70px;
+    padding: 0 22px;
 }
 .hero {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: 18px;
+    gap: 22px;
     align-items: center;
-    background: var(--surface);
-    border-radius: 18px;
-    padding: 20px 24px;
-    box-shadow: var(--shadow);
-    border: 1px solid #eef2f7;
+    padding: 24px 26px;
+    border-radius: var(--radius-xl);
+    background: linear-gradient(120deg, rgba(255, 255, 255, 0.96), rgba(255, 244, 230, 0.9));
+    border: 1px solid rgba(255, 255, 255, 0.8);
+    box-shadow: var(--shadow-lg);
+    position: relative;
+    overflow: hidden;
+}
+.hero::after {
+    content: "";
+    position: absolute;
+    inset: -30% -10% auto auto;
+    width: 240px;
+    height: 240px;
+    background: radial-gradient(circle, rgba(255, 159, 64, 0.25), rgba(255, 159, 64, 0));
+    pointer-events: none;
 }
 .hero h1 {
-    margin: 6px 0 8px;
-    font-size: 24px;
+    margin: 8px 0 10px;
+    font-size: 28px;
 }
 .kicker {
     font-size: 11px;
-    letter-spacing: 0.14em;
+    letter-spacing: 0.18em;
     text-transform: uppercase;
     color: var(--muted);
 }
 .meta {
-    font-size: 12px;
-    color: var(--muted);
+    font-size: 13px;
+    color: var(--muted-strong);
 }
 .chips {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
-    margin-top: 12px;
+    margin-top: 14px;
 }
 .chip {
-    background: #f1f5f9;
-    border: 1px solid var(--border);
+    background: rgba(17, 24, 39, 0.04);
+    border: 1px solid rgba(148, 163, 184, 0.35);
     border-radius: 999px;
-    padding: 6px 10px;
+    padding: 6px 12px;
     font-size: 12px;
     font-weight: 600;
+    color: var(--muted-strong);
 }
 .hero-actions {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 12px;
     align-items: flex-end;
 }
 .action-buttons {
@@ -897,18 +925,56 @@ body {
     justify-content: flex-end;
 }
 .hint {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--muted);
-    max-width: 260px;
+    max-width: 280px;
     text-align: right;
+}
+.section-nav {
+    margin: 18px 0 10px;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.section-nav a {
+    text-decoration: none;
+    color: var(--muted-strong);
+    font-weight: 600;
+    font-size: 12px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.7);
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    transition: all 0.2s ease;
+}
+.section-nav a:hover {
+    color: var(--ink);
+    border-color: rgba(148, 163, 184, 0.6);
+    transform: translateY(-1px);
 }
 .panel {
     background: var(--surface);
-    border-radius: 16px;
-    padding: 16px 20px;
+    border-radius: var(--radius-lg);
+    padding: 18px 20px;
     margin-top: 18px;
     box-shadow: var(--shadow);
-    border: 1px solid #eef2f7;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+}
+.panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+.panel-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--ink);
+}
+.panel-subtitle {
+    font-size: 12px;
+    color: var(--muted);
 }
 .control-grid {
     display: grid;
@@ -924,25 +990,25 @@ label {
     color: var(--muted);
 }
 select, input {
-    padding: 9px 10px;
-    border-radius: 10px;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
     border: 1px solid var(--border);
     font-size: 13px;
-    color: var(--secondary);
-    background: #f8fafc;
+    color: var(--ink);
+    background: #fbfcfe;
 }
 details {
     margin-top: 12px;
-    background: #f8fafc;
+    background: var(--surface-soft);
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: var(--radius-md);
     padding: 10px 12px;
 }
 summary {
     cursor: pointer;
     font-size: 12px;
     font-weight: 600;
-    color: #334155;
+    color: var(--muted-strong);
     list-style: none;
 }
 summary::-webkit-details-marker { display: none; }
@@ -965,17 +1031,17 @@ label.check {
     font-size: 12px;
     text-transform: none;
     letter-spacing: 0;
-    color: var(--secondary);
+    color: var(--muted-strong);
 }
 .panel-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
-    margin-top: 12px;
+    margin-top: 14px;
 }
 .panel-note {
     margin-top: 8px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--muted);
 }
 .button {
@@ -983,14 +1049,19 @@ label.check {
     align-items: center;
     justify-content: center;
     gap: 6px;
-    padding: 8px 12px;
-    border-radius: 10px;
-    border: 1px solid var(--border);
+    padding: 9px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.4);
     text-decoration: none;
     font-size: 12px;
     font-weight: 600;
-    color: var(--secondary);
+    color: var(--ink);
     background: #fff;
+    transition: transform 0.18s ease, box-shadow 0.18s ease, border 0.18s ease;
+}
+.button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 10px 20px rgba(15, 23, 42, 0.08);
 }
 .button.primary {
     background: var(--accent);
@@ -998,32 +1069,55 @@ label.check {
     border: none;
 }
 .button.secondary {
-    background: #f8fafc;
-    color: #334155;
+    background: #f5f7fb;
+    color: var(--muted-strong);
 }
 .button.ghost {
     background: transparent;
-    color: #334155;
+    color: var(--muted-strong);
+}
+.section-head {
+    margin: 26px 0 12px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 14px;
+}
+.section-kicker {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--muted);
+}
+.section-title {
+    font-size: 18px;
+    font-weight: 600;
+    margin-top: 6px;
+}
+.section-note {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--muted);
 }
 .summary {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
     gap: 14px;
-    margin: 20px 0;
+    margin: 16px 0 8px;
 }
 .card {
     background: var(--surface);
-    border-radius: 14px;
+    border-radius: var(--radius-md);
     padding: 16px;
     box-shadow: var(--shadow);
-    border: 1px solid #eff2f5;
+    border: 1px solid rgba(148, 163, 184, 0.15);
 }
 .card h3 {
     margin: 0 0 8px;
-    font-size: 12px;
+    font-size: 11px;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: #9a3412;
+    letter-spacing: 0.12em;
+    color: #b45309;
 }
 .card .value {
     font-size: 22px;
@@ -1037,7 +1131,7 @@ label.check {
 .progress {
     margin-top: 8px;
     height: 7px;
-    background: #e2e8f0;
+    background: #e5e7eb;
     border-radius: 999px;
     overflow: hidden;
 }
@@ -1046,26 +1140,26 @@ label.check {
     height: 100%;
     background: var(--accent);
 }
-.progress.split span.internal { background: #60a5fa; }
-.progress.split span.external { background: #fbbf24; }
+.progress.split span.internal { background: #38bdf8; }
+.progress.split span.external { background: #f59e0b; }
 .highlight-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 14px;
-    margin: 10px 0 20px;
+    margin: 10px 0 18px;
 }
 .highlight-card {
     background: var(--surface);
-    border-radius: 14px;
+    border-radius: var(--radius-md);
     padding: 16px;
-    border: 1px solid #eff2f5;
+    border: 1px solid rgba(148, 163, 184, 0.18);
     box-shadow: var(--shadow);
 }
 .highlight-card h4 {
     margin: 0 0 8px;
     font-size: 11px;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.12em;
     color: var(--muted);
 }
 .mod-name {
@@ -1078,7 +1172,7 @@ label.check {
 .highlight-card .score {
     margin-top: 6px;
     font-size: 13px;
-    color: #9a3412;
+    color: #b45309;
 }
 .source-breakdown {
     margin-top: 6px;
@@ -1098,23 +1192,16 @@ label.check {
     margin-bottom: 18px;
 }
 .filter-note {
-    margin-top: 12px;
+    margin-top: 10px;
     font-size: 12px;
-    color: var(--muted);
-}
-.section-title {
-    margin: 20px 0 12px;
-    font-size: 12px;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
     color: var(--muted);
 }
 .table-wrap {
     background: var(--surface);
-    border-radius: 16px;
+    border-radius: var(--radius-lg);
     overflow-x: auto;
     box-shadow: var(--shadow);
-    border: 1px solid #eef2f7;
+    border: 1px solid rgba(148, 163, 184, 0.2);
 }
 .table {
     width: 100%;
@@ -1122,7 +1209,7 @@ label.check {
     border-collapse: collapse;
 }
 .table th, .table td {
-    padding: 10px 12px;
+    padding: 11px 12px;
     border-bottom: 1px solid #eef0f4;
     text-align: left;
     font-size: 13px;
@@ -1146,10 +1233,10 @@ label.check {
 .badge {
     display: inline-flex;
     align-items: center;
-    padding: 2px 6px;
+    padding: 2px 8px;
     border-radius: 999px;
     background: #fff7ed;
-    color: #9a3412;
+    color: #b45309;
     font-size: 10px;
     font-weight: 700;
     margin-left: 6px;
@@ -1157,7 +1244,7 @@ label.check {
 .pill {
     display: inline-flex;
     align-items: center;
-    padding: 3px 8px;
+    padding: 3px 9px;
     border-radius: 999px;
     font-size: 11px;
     font-weight: 700;
@@ -1173,7 +1260,7 @@ label.check {
 .bar {
     margin-top: 6px;
     height: 6px;
-    background: #eef0f4;
+    background: #e5e7eb;
     border-radius: 999px;
     overflow: hidden;
 }
@@ -1185,7 +1272,7 @@ label.check {
 .mini-bar {
     margin-top: 6px;
     height: 5px;
-    background: #eef0f4;
+    background: #eef2f7;
     border-radius: 999px;
     overflow: hidden;
     display: flex;
@@ -1194,8 +1281,8 @@ label.check {
     display: block;
     height: 100%;
 }
-.mini-bar span.internal { background: #60a5fa; }
-.mini-bar span.external { background: #fbbf24; }
+.mini-bar span.internal { background: #38bdf8; }
+.mini-bar span.external { background: #f59e0b; }
 .chat-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -1204,9 +1291,9 @@ label.check {
 }
 .chat-card {
     background: var(--surface);
-    border-radius: 16px;
+    border-radius: var(--radius-lg);
     padding: 16px;
-    border: 1px solid #eff2f5;
+    border: 1px solid rgba(148, 163, 184, 0.18);
     box-shadow: var(--shadow);
 }
 .chat-card h3 {
@@ -1230,6 +1317,16 @@ label.check {
     justify-content: space-between;
     font-size: 12px;
     color: var(--muted);
+}
+@keyframes rise {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.hero, .panel, .summary .card, .highlight-card, .table-wrap, .chat-card {
+    animation: rise 0.5s ease both;
+}
+@media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
 }
 @media (max-width: 900px) {
     .hero {
@@ -1298,9 +1395,27 @@ label.check {
         </div>
     </div>
 
+    <div class="section-nav">
+        <a href="#overview">Overview</a>
+        <a href="#planning">Rewards</a>
+        <a href="#risks">Risk</a>
+        <a href="#highlights">Highlights</a>
+        <a href="#insights">Insights</a>
+        <a href="#leaderboard">Leaderboard</a>
+        <?php if ($isAll && !empty($bundle['chats'])): ?>
+            <a href="#multichat">Multi-chat</a>
+        <?php endif; ?>
+    </div>
+
     <div class="panel">
         <form method="get">
             <input type="hidden" name="token" value="<?php echo htmlspecialchars((string)$token, ENT_QUOTES, 'UTF-8'); ?>" />
+            <div class="panel-head">
+                <div>
+                    <div class="panel-title">Focus + Filters</div>
+                    <div class="panel-subtitle">Tune the leaderboard view and export scope.</div>
+                </div>
+            </div>
             <div class="control-grid">
                 <label>
                     Chat
@@ -1416,6 +1531,13 @@ label.check {
         </form>
     </div>
 
+    <div class="section-head" id="overview">
+        <div>
+            <div class="section-kicker">Overview</div>
+            <div class="section-title">Team Pulse</div>
+            <div class="section-note">A fast health check across volume, activity, and reward capacity.</div>
+        </div>
+    </div>
     <div class="summary">
         <div class="card">
             <h3>Mods Tracked</h3>
@@ -1483,7 +1605,13 @@ label.check {
         </div>
     </div>
 
-    <div class="section-title">Reward Planning</div>
+    <div class="section-head" id="planning">
+        <div>
+            <div class="section-kicker">Rewards</div>
+            <div class="section-title">Reward Planning</div>
+            <div class="section-note">Forecasts, minimum fairness budget, and bonus split guidance.</div>
+        </div>
+    </div>
     <div class="summary">
         <div class="card">
             <h3>Reward Forecast (MTD)</h3>
@@ -1529,7 +1657,13 @@ label.check {
         </div>
     </div>
 
-    <div class="section-title">Risk Signals</div>
+    <div class="section-head" id="risks">
+        <div>
+            <div class="section-kicker">Risk</div>
+            <div class="section-title">Risk Signals</div>
+            <div class="section-note">Flagging potential conflict, burnout, or moderation imbalance.</div>
+        </div>
+    </div>
     <div class="summary">
         <div class="card">
             <h3>Conflict / Spam Risk</h3>
@@ -1570,7 +1704,13 @@ label.check {
         </div>
     </div>
 
-    <div class="section-title">Highlights</div>
+    <div class="section-head" id="highlights">
+        <div>
+            <div class="section-kicker">Spotlight</div>
+            <div class="section-title">Highlights</div>
+            <div class="section-note">Top performers and standout badges for the month.</div>
+        </div>
+    </div>
     <div class="highlight-grid">
         <?php foreach ($topMods as $idx => $mod): ?>
             <div class="highlight-card">
@@ -1686,7 +1826,13 @@ label.check {
         </div>
     </div>
 
-    <div class="section-title">Insights</div>
+    <div class="section-head" id="insights">
+        <div>
+            <div class="section-kicker">Insights</div>
+            <div class="section-title">Operational Insights</div>
+            <div class="section-note">Distribution, quality, and eligibility gaps at a glance.</div>
+        </div>
+    </div>
     <div class="insights-grid">
         <div class="card">
             <h3>Reward Distribution</h3>
@@ -1737,7 +1883,13 @@ label.check {
         Showing <?php echo count($modsFiltered); ?> of <?php echo count($mods); ?> mods · Sort: <?php echo htmlspecialchars($sortLabel, ENT_QUOTES, 'UTF-8'); ?> (<?php echo htmlspecialchars($sortDir, ENT_QUOTES, 'UTF-8'); ?>) · <?php echo htmlspecialchars($filtersText, ENT_QUOTES, 'UTF-8'); ?>
     </div>
 
-    <div class="section-title">Leaderboard</div>
+    <div class="section-head" id="leaderboard">
+        <div>
+            <div class="section-kicker">Leaderboard</div>
+            <div class="section-title">Mod Rankings</div>
+            <div class="section-note">Sorted by your selected metric and filters.</div>
+        </div>
+    </div>
     <div class="table-wrap">
         <table class="table">
             <thead>
@@ -1877,7 +2029,13 @@ label.check {
     </div>
 
     <?php if ($isAll && !empty($bundle['chats'])): ?>
-        <div class="section-title">Per Chat Breakdown</div>
+        <div class="section-head" id="multichat">
+            <div>
+                <div class="section-kicker">Multi-chat</div>
+                <div class="section-title">Per Chat Breakdown</div>
+                <div class="section-note">Compare volume, actions, and budget across groups.</div>
+            </div>
+        </div>
         <div class="chat-grid">
             <?php foreach ($bundle['chats'] as $chat): ?>
                 <?php $chatSummary = $chat['summary'] ?? []; ?>

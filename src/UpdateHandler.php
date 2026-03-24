@@ -246,7 +246,7 @@ class UpdateHandler
             'buy_stars_test', 'buy_crypto_test', 'paystatus', 'debughours', 'debughoursall', 'finduser', 'autoweekly', 'autoinactive', 'activityrank',
             'aireview', 'autoaireview', 'retention', 'autoretention', 'timesheet', 'compare', 'weeklysummary', 'autospike',
             'mydashboard', 'goalset', 'goalstatus', 'goalclear', 'autofeedback',
-            'modaudit',
+            'modaudit', 'menu',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
 
@@ -260,6 +260,11 @@ class UpdateHandler
 
         if ($isPrivate) {
             if (in_array($command, ['help', 'start'], true)) {
+                if ($command === 'start') {
+                    $this->handleMenu($chatId, $userId);
+                    $this->tg->sendMessage($chatId, 'Need the full guide? Use /guide.', ['parse_mode' => 'HTML']);
+                    return;
+                }
                 $this->tg->sendMessage($chatId, $this->helpText(true), ['parse_mode' => 'HTML']);
                 return;
             }
@@ -296,6 +301,11 @@ class UpdateHandler
 
             if ($command === 'guide') {
                 $this->handleGuide($chatId);
+                return;
+            }
+
+            if ($command === 'menu') {
+                $this->handleMenu($chatId, $userId);
                 return;
             }
 
@@ -499,6 +509,7 @@ class UpdateHandler
                 }
             }
 
+            $this->tg->sendMessage($chatId, 'Unknown command. Try /menu or /guide.', ['parse_mode' => 'HTML']);
             return;
         }
     }
@@ -548,7 +559,7 @@ class UpdateHandler
         }
 
         if (!$target) {
-            $this->sendReportMessage('Mod not found in this chat.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('Mod not found in this chat. Try /finduser <name> or /modadd @username.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -602,7 +613,7 @@ class UpdateHandler
         }
 
         if (!$target) {
-            $this->sendReportMessage('Mod not found in this chat.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('Mod not found in this chat. Try /finduser <name> or /modadd @username.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -732,7 +743,7 @@ class UpdateHandler
 
         $userRow = $this->findChatUser($chatId, $targetUserId, $targetUsername);
         if (!$userRow) {
-            $this->sendReportMessage('Mod not found in this chat. Use /finduser to locate.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('Mod not found in this chat. Use /finduser <name> or /modadd @username.', ['parse_mode' => 'HTML']);
             return;
         }
         if (empty($userRow['is_mod'])) {
@@ -813,7 +824,7 @@ class UpdateHandler
         $modB = $this->findModInStats($stats['mods'], $userBId, $userBUsername);
 
         if (!$modA || !$modB) {
-            $this->sendReportMessage('One or both mods not found in this chat.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('One or both mods not found in this chat. Try /finduser or /modlist.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -2779,7 +2790,9 @@ class UpdateHandler
         }
 
         $lines = [
-            'Please include a chat id or set /usechat. Example: /stats -1001234567890',
+            'No chat selected. Add a chat id or set /usechat.',
+            'Quick set: /usechat <id>',
+            'Example: /stats -1001234567890',
             'Your chats:',
         ];
         foreach ($chats as $chat) {
@@ -3657,7 +3670,7 @@ class UpdateHandler
             }
         }
         if (!$target) {
-            $this->tg->sendMessage($responseChatId, 'Mod not found in this chat.', ['parse_mode' => 'HTML']);
+            $this->tg->sendMessage($responseChatId, 'Mod not found in this chat. Try /modadd @username.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -4747,74 +4760,27 @@ class UpdateHandler
         if ($private) {
             return implode("\n", [
                 '<b>SP NET MOD TOOL</b>',
-                'Use these in private chat.',
-                'Reports are delivered to the reports channel + manager DMs.',
-                'The bot stays silent in groups and does not DM mods.',
-                'Tip: set a default chat with /usechat &lt;chat_id&gt; to skip chat ids.',
-                '/mychats - list your group chats',
-                '/linkedchat (show default linked group)',
-                '/whoami (your bot role + id)',
-                '/botusers [days] [limit]',
-                '/usechat &lt;chat_id&gt; | /usechat &lt;title&gt; | /usechat off',
-                '/guide (full usage guide with examples)',
-                '/mydashboard [YYYY-MM]',
-                '/goalset &lt;metric&gt; &lt;value&gt; [YYYY-MM]',
-                '/goalstatus [YYYY-MM]',
-                '/goalclear [YYYY-MM]',
-                '/stats [chat_id] [YYYY-MM] [@user]',
-                '/finduser &lt;name|@username|user_id&gt; [chat_id]',
-                '/timesheet &lt;@username|user_id&gt; [YYYY-MM-DD] [YYYY-MM-DD] [chat_id]',
-                '/compare &lt;@user1|id1&gt; &lt;@user2|id2&gt; [YYYY-MM] [chat_id]',
-                '/weeklysummary [chat_id] [days]',
-                '/autospike on [hour] [threshold%] [chat_id]',
-                '/leaderboard [chat_id] [YYYY-MM] [budget]',
-                '/report [chat_id] [YYYY-MM] [budget]',
-                '/reportcsv [chat_id] [YYYY-MM] [budget]',
-                '/exportgsheet [chat_id] [YYYY-MM] [budget]',
-                '/summary [YYYY-MM] [budget]',
+                'Private chat only. Reports are delivered to the reports channel + manager DMs.',
+                'Quick start: /mychats → /usechat &lt;chat_id&gt; → /modadd @username',
+                '',
+                '<b>Command Center</b>',
+                '/menu (smart status + next steps)',
+                '/guide (full guide with examples)',
+                '',
+                '<b>Daily Ops</b>',
+                '/stats [@user]',
+                '/leaderboard [YYYY-MM] [budget]',
+                '/report [YYYY-MM] [budget]',
+                '/weeklysummary [days]',
                 '/forecast [budget]',
-                '/plan',
-                '/setplan &lt;free|premium|enterprise&gt; [days] (owner only)',
-                '/giftplan &lt;chat_id&gt; &lt;free|premium|enterprise&gt; [days] [note] (manager/owner)',
-                '/grantplan &lt;chat_id&gt; &lt;free|premium|enterprise&gt; [days] [note] (manager/owner)',
-                '/approval on|off &lt;chat_id&gt; (manager/owner)',
-                '/approvereport &lt;chat_id&gt; [YYYY-MM] (manager/owner)',
-                '/approvalstatus &lt;chat_id&gt; [YYYY-MM] (manager/owner)',
-                '/auditlogcsv [chat_id] [limit] (manager/owner)',
-                '/coach [YYYY-MM]',
-                '/health [YYYY-MM]',
-                '/trend [YYYY-MM] [budget]',
-                '/execsummary [YYYY-MM] [budget]',
-                '/archive',
-                '/premium (view premium benefits)',
-                '/pricing (tiers + features)',
-                '/buy_stars_test &lt;amount&gt; [chat_id] (manager/owner)',
-                '/buy_crypto_test &lt;amount&gt; [chat_id] (manager/owner)',
-                '/paystatus (latest payment)',
-                '/setbudget &lt;amount&gt; [chat_id]',
-                '/settimezone &lt;Region/City&gt; [chat_id]',
-                '/setactivity &lt;gap_minutes&gt; &lt;floor_minutes&gt; [chat_id]',
-                '/autoreport on [day] [hour] [chat_id]',
-                '/autoprogress on [day] [hour] [chat_id]',
-                '/autoweekly on [weekday] [hour] [chat_id]',
-                '/autoinactive on [days] [hour] [chat_id]',
-                '/autoaireview on [day] [hour] [chat_id]',
-                '/autoretention on [day] [hour] [threshold%] [chat_id]',
-                '/autofeedback on [hour] [chat_id]',
-                '/activityrank [chat_id] [YYYY-MM] [top]',
-                '/aireview [chat_id] [YYYY-MM]',
-                '/retention [chat_id] [YYYY-MM] [threshold%]',
-                '/progress [chat_id] [budget]',
-                '/modadd [chat_id] &lt;@username|user_id&gt;',
-                '/modremove [chat_id] &lt;@username|user_id&gt;',
-                '/modlist [chat_id]',
-                '/modaudit [chat_id] [limit]',
-                '/debughours [chat_id] [YYYY-MM] [@user]',
-                '/debughoursall [chat_id] [YYYY-MM]',
-                '/rosteradd &lt;@username|user_id&gt; &lt;role&gt; [notes]',
-                '/rosterrole &lt;@username|user_id&gt; &lt;role&gt; [notes]',
-                '/rosterremove &lt;@username|user_id&gt;',
-                '/rosterlist',
+                '',
+                '<b>Setup</b>',
+                '/modadd @user | /modremove @user | /modlist',
+                '/setbudget &lt;amount&gt; | /settimezone &lt;Region/City&gt; | /usechat',
+                '/autoreport on | /autoprogress on | /autoweekly on',
+                '',
+                '<b>More</b>',
+                '/pricing · /premium · /auditlogcsv',
             ]);
         }
 
@@ -4846,33 +4812,25 @@ class UpdateHandler
         $parts = [];
 
         $parts[] = implode("\n", [
-            '<b>SP NET MOD TOOL – Usage Guide (1/3)</b>',
-            'All commands are used in <b>private chat</b> with the bot.',
+            '<b>SP NET MOD TOOL – Usage Guide (1/4)</b>',
+            'All commands are used in <b>private chat</b>.',
             'Reports are sent to the <b>reports channel</b> and to managers.',
             'The bot stays silent in groups and does not DM mods.',
             '',
-            '<b>Step 1: Add bot to groups</b>',
+            '<b>Quick Start (5 min)</b>',
             '1) Add bot to the group',
             '2) Make it admin or disable privacy mode in BotFather',
             '3) Send any message in the group',
+            '4) In private: <code>/mychats</code> → <code>/usechat &lt;chat_id&gt;</code>',
+            '5) Add mods: <code>/modadd @alex</code> or reply to a forwarded user with <code>/modadd</code>',
             '',
-            '<b>Step 2: Pick a default chat</b>',
-            '<code>/mychats</code>',
-            '<code>/usechat &lt;chat_id&gt;</code>',
-            '<code>/linkedchat</code>',
-            '<code>/whoami</code>',
-            '',
-            '<b>Step 3: Add mods</b>',
-            '<code>/modadd @alex</code>',
-            '<code>/modadd 123456789</code>',
-            '<code>/modremove @alex</code>',
-            '<code>/modlist</code>',
-            '',
-            'Tip: Forward a user message here and reply <code>/modadd</code>.',
+            '<b>Command Center</b>',
+            '<code>/menu</code> (status + next steps)',
+            '<code>/linkedchat</code> · <code>/whoami</code>',
         ]);
 
         $parts[] = implode("\n", [
-            '<b>Usage Guide (2/3) – Stats + Rewards</b>',
+            '<b>Usage Guide (2/4) – Stats + Rewards</b>',
             '<b>Stats</b>',
             '<code>/stats</code>',
             '<code>/stats 2026-02</code>',
@@ -4883,22 +4841,40 @@ class UpdateHandler
             '<code>/timesheet @alex 2026-02-01 2026-02-28</code>',
             '<code>/compare @alex @maria 2026-02</code>',
             '<code>/activityrank 2026-02 5</code>',
-            '<code>/aireview 2026-02</code>',
-            '<code>/retention 2026-02 30%</code>',
-            '<code>/weeklysummary 7</code>',
-            'Weekly summary DMs include a one-line TL;DR with quick summary + top risk + top reward.',
-            'Weekly summary includes performance badges (Top Helper, Most Balanced, Consistency King, Fast Responder).',
             '',
-            '<b>Personal dashboard + goals</b>',
+            '<b>Personal Dashboard + Goals</b>',
             '<code>/mydashboard</code>',
             '<code>/goalset messages 500</code>',
             '<code>/goalset active_hours 12</code>',
             '<code>/goalstatus</code>',
             '<code>/goalclear</code>',
             '',
-            '<b>Leaderboards</b>',
-            '<code>/leaderboard</code>',
-            '<code>/leaderboard 2026-02</code>',
+            '<b>Rewards</b>',
+            '<code>/leaderboard 2026-02 300</code>',
+            '<code>/report 2026-02 300</code>',
+            '<code>/reportcsv 2026-02 300</code>',
+            '<code>/exportgsheet 2026-02 300</code>',
+            '<code>/summary 2026-02 1200</code>',
+            '<code>/forecast 300</code> (reward forecast for current month)',
+        ]);
+
+        $parts[] = implode("\n", [
+            '<b>Usage Guide (3/4) – Automation + Alerts</b>',
+            '<b>Automation</b>',
+            '<code>/autoreport on 1 9</code> (monthly)',
+            '<code>/autoprogress on 15 12</code> (mid-month)',
+            '<code>/autoweekly on 1 10</code> (weekly)',
+            '<code>/autoinactive on 7 10</code> (inactive alerts)',
+            '<code>/autospike on 10 35%</code> (inactivity spikes)',
+            '<code>/autoaireview on 1 9</code> (AI review)',
+            '<code>/autoretention on 2 10 30%</code> (retention alerts)',
+            '<code>/autofeedback on 20</code> (daily tips)',
+            '',
+            '<b>Manual Reports</b>',
+            '<code>/weeklysummary 7</code>',
+            '<code>/progress 300</code>',
+            '<code>/aireview 2026-02</code>',
+            '<code>/retention 2026-02 30%</code>',
             '',
             '<b>Hours (Active + Presence)</b>',
             'Active hours = message-based activity sessions',
@@ -4906,72 +4882,28 @@ class UpdateHandler
             '<code>/debughours</code>',
             '<code>/debughours 2026-02 @alex</code>',
             '<code>/debughoursall 2026-02</code>',
-            '',
-            '<b>Reward sheets</b>',
-            '<code>/report 2026-02 5000</code>',
-            '<code>/reportcsv 2026-02 5000</code>',
-            'Includes performance badges (Top Helper, Most Balanced, Consistency King, Fast Responder).',
-            '',
-            '<b>Mid-month progress</b>',
-            '<code>/progress</code>',
-            '<code>/progress 7500</code>',
-            '<code>/forecast</code> (reward forecast for current month)',
-            '',
-            '<b>Multi-chat summary</b>',
-            '<code>/summary 2026-02 12000</code>',
-            '',
-            '<b>Audit</b>',
-            '<code>/modaudit 25</code>',
         ]);
 
         $parts[] = implode("\n", [
-            '<b>Usage Guide (3/3) – Automation + Extras</b>',
-            '<b>Automation</b>',
-            '<code>/autoreport on 1 9</code>',
-            '<code>/autoprogress on 15 12</code>',
-            '<code>/autoweekly on 1 10</code> (Mon 10:00)',
-            '<code>/autoinactive on 7 10</code> (inactive 7d, 10:00)',
-            '<code>/autoaireview on 1 9</code> (monthly AI review)',
-            '<code>/autoretention on 2 10 30%</code> (retention drop alerts)',
-            '<code>/autospike on 10 35%</code> (inactivity spike alerts)',
-            '<code>/autofeedback on 20</code> (daily micro-feedback DMs)',
-            '',
-            '<b>Report delivery</b>',
-            'Set <code>reports.channel_id</code> in config.local.php to your reports-only channel.',
-            'Reports go to that channel + manager DMs. Mod DMs are disabled by default.',
-            '',
-            '<b>Admin audit</b>',
-            '<code>/botusers 30 20</code> (users who ran commands)',
-            '',
-            '<b>Approvals + audit log</b>',
+            '<b>Usage Guide (4/4) – Admin + Audit</b>',
+            '<b>Admin</b>',
+            '<code>/setbudget 300</code>',
+            '<code>/settimezone Asia/Kolkata</code>',
+            '<code>/setactivity 5 1</code> (gap + floor minutes)',
+            '<code>/modaudit 25</code>',
+            '<code>/auditlogcsv 200</code>',
+            '<code>/botusers 30 20</code>',
+            '<code>/pricing</code> / <code>/premium</code>',
+            '<code>/giftplan -1001234567890 premium 30</code>',
             '<code>/approval on</code>',
             '<code>/approvereport 2026-02</code>',
             '<code>/approvalstatus 2026-02</code>',
-            '<code>/auditlogcsv 200</code>',
-            'Score audits: every reward calculation is logged as <code>score_calc</code>.',
-            '',
-            '<b>Test payments (Stars + Crypto)</b>',
-            '<code>/buy_stars_test 500</code>',
-            '<code>/buy_crypto_test 25</code>',
-            '<code>/paystatus</code>',
-            'Stars sandbox requires telegram.test_environment=true + a test bot token.',
-            '',
-            '<b>Premium insights</b>',
-            '<code>/coach 2026-02</code>',
-            '<code>/health 2026-02</code>',
-            '<code>/trend 2026-02 5000</code>',
-            '<code>/execsummary 2026-02 5000</code>',
             '',
             '<b>Dashboard</b>',
-            'Open in browser:',
             '<code>https://YOUR_DOMAIN/?token=YOUR_TOKEN</code>',
             '<code>http://127.0.0.1:8000/dashboard.php?token=YOUR_TOKEN</code>',
-            '<code>http://127.0.0.1:8000/manager-digest.php?token=YOUR_TOKEN</code> (manager digest)',
-            '<code>http://127.0.0.1:8000/manager-digest.php?token=YOUR_TOKEN&amp;format=pdf</code> (digest PDF)',
-            'Tip: add <code>&amp;chat_id=...&amp;month=YYYY-MM&amp;budget=5000</code>',
-            'Dashboard highlights show badges (Top Helper, Most Balanced, Consistency King, Fast Responder).',
-            'Planning cards: Reward Forecast (MTD pace), Budget Optimizer, Bonus Split Planner.',
-            'Risk signals: Conflict/Spam risk + Burnout risk.',
+            '<code>http://127.0.0.1:8000/manager-digest.php?token=YOUR_TOKEN</code>',
+            '<code>http://127.0.0.1:8000/manager-digest.php?token=YOUR_TOKEN&amp;format=pdf</code>',
             '',
             '<b>Imports</b>',
             '<code>php bin/import-chatkeeper.php --file=/path/analysis_users.csv --chat=&lt;chat_id&gt; --month=2026-02</code>',
@@ -4982,6 +4914,62 @@ class UpdateHandler
         ]);
 
         return $parts;
+    }
+
+    private function handleMenu(int|string $responseChatId, int|string $userId): void
+    {
+        $defaultChatId = $this->userSettings->getDefaultChatId($userId);
+        $reportsConfig = $this->config['reports'] ?? [];
+        $reportChannel = $reportsConfig['channel_id'] ?? null;
+
+        $lines = [];
+        $lines[] = '<b>SP NET MOD TOOL — Command Center</b>';
+        $lines[] = 'Private chat only. Reports go to the reports channel + managers.';
+        $lines[] = '';
+        $lines[] = '<b>Status</b>';
+
+        if (!$defaultChatId) {
+            $lines[] = 'Default chat: <b>not set</b>';
+            $lines[] = 'Next: /mychats → /usechat &lt;chat_id&gt;';
+        } else {
+            $chatMeta = $this->getChatMeta($defaultChatId);
+            $chatTitle = $chatMeta['chat_title'] ?? ('Chat ' . $defaultChatId);
+            $settings = $this->settings->get($defaultChatId);
+            $subscription = $this->subscriptions->get($defaultChatId);
+            $plan = ucfirst((string)($subscription['plan'] ?? 'free'));
+            $budget = (float)($settings['reward_budget'] ?? 0);
+            $timezone = $settings['timezone'] ?? ($this->config['timezone'] ?? 'UTC');
+
+            $modRow = $this->db->fetch('SELECT COUNT(*) as total FROM chat_members WHERE chat_id = ? AND is_mod = 1', [$defaultChatId]);
+            $modCount = (int)($modRow['total'] ?? 0);
+
+            $lines[] = 'Default chat: <b>' . $this->escape($chatTitle) . '</b> (' . $defaultChatId . ')';
+            $lines[] = 'Plan: ' . $this->escape($plan) . ' · Mods: ' . $modCount . ' · Budget: ' . number_format($budget, 2) . ' · TZ: ' . $this->escape($timezone);
+            $lines[] = 'Auto reports: ' . (!empty($settings['auto_report_enabled']) ? 'ON' : 'OFF') .
+                ' · Progress: ' . (!empty($settings['progress_report_enabled']) ? 'ON' : 'OFF') .
+                ' · Weekly: ' . (!empty($settings['weekly_summary_enabled']) ? 'ON' : 'OFF') .
+                ' · Inactivity: ' . (!empty($settings['inactivity_alert_enabled']) ? 'ON' : 'OFF');
+
+            if ($modCount === 0) {
+                $lines[] = 'Next: add mods with /modadd @username';
+            }
+            if ($budget <= 0) {
+                $lines[] = 'Tip: set reward budget with /setbudget 300';
+            }
+        }
+
+        $lines[] = 'Reports channel: ' . ($reportChannel ? (string)$reportChannel : 'not set');
+        $lines[] = '';
+        $lines[] = '<b>Quick Actions</b>';
+        $lines[] = '/stats · /leaderboard · /report · /weeklysummary · /forecast';
+        $lines[] = '<b>Setup</b>';
+        $lines[] = '/modadd · /modlist · /setbudget · /settimezone · /usechat';
+        $lines[] = '<b>Automation</b>';
+        $lines[] = '/autoreport · /autoprogress · /autoweekly · /autoinactive · /autospike';
+        $lines[] = '<b>Help</b>';
+        $lines[] = '/guide · /pricing · /premium';
+
+        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
     }
 
     private function buildActivityIndex(array $summary): float
