@@ -111,6 +111,11 @@ Private chat commands:
 - `/goalset <metric> <value> [YYYY-MM]` (set monthly goal)
 - `/goalstatus [YYYY-MM]`
 - `/goalclear [YYYY-MM]`
+- `/mychats` (list your group chats)
+- `/usechat <chat_id>` (set default chat)
+- `/linkedchat` (show default linked chat)
+- `/whoami` (your role + user id)
+- `/botusers [days] [limit]` (recent bot users)
 - `/stats [chat_id] [YYYY-MM] [@user]`
 - `/timesheet <@username|user_id> [YYYY-MM-DD] [YYYY-MM-DD] [chat_id]`
 - `/compare <@user1|id1> <@user2|id2> [YYYY-MM] [chat_id]`
@@ -162,6 +167,7 @@ Private chat commands:
 - `/modadd [chat_id] <@username|user_id>`
 - `/modremove [chat_id] <@username|user_id>`
 - `/modlist [chat_id]`
+- `/modaudit [chat_id] [limit]`
 - `/rosteradd <@username|user_id> <role> [notes]`
 - `/rosterrole <@username|user_id> <role> [notes]`
 - `/rosterremove <@username|user_id>`
@@ -188,6 +194,11 @@ This section walks through the full workflow from setup to monthly rewards.
 ```text
 /usechat -1001234567890
 ```
+Optional helpers:
+```text
+/linkedchat
+/whoami
+```
 
 ### 2) Add and manage mods
 Use `/modadd` and `/modremove` in private chat.
@@ -196,6 +207,7 @@ Use `/modadd` and `/modremove` in private chat.
 /modadd 123456789
 /modremove @alex
 /modlist
+/modaudit 25
 ```
 Tip: You can forward a user message to the bot in private chat and reply with `/modadd` to avoid searching for IDs.
 
@@ -229,6 +241,11 @@ If you do not pass a budget, it will still rank mods and output reward suggestio
 /progress 7500
 /forecast
 /forecast 7500
+```
+
+### 5b) Admin audit
+```text
+/botusers 30 20
 ```
 
 ### 6) Multi-chat summary (combined view)

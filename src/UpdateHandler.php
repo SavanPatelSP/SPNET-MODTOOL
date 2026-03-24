@@ -184,6 +184,7 @@ class UpdateHandler
             );
         }
 
+        $this->logCommandAudit($message, $parsed, $chatType);
         $this->handleCommand($chatId, $message, $parsed['command'], $parsed['args'], $chatType);
     }
 
@@ -245,6 +246,7 @@ class UpdateHandler
             'buy_stars_test', 'buy_crypto_test', 'paystatus', 'debughours', 'debughoursall', 'finduser', 'autoweekly', 'autoinactive', 'activityrank',
             'aireview', 'autoaireview', 'retention', 'autoretention', 'timesheet', 'compare', 'weeklysummary', 'autospike',
             'mydashboard', 'goalset', 'goalstatus', 'goalclear', 'autofeedback',
+            'modaudit',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
 
@@ -259,6 +261,21 @@ class UpdateHandler
         if ($isPrivate) {
             if (in_array($command, ['help', 'start'], true)) {
                 $this->tg->sendMessage($chatId, $this->helpText(true), ['parse_mode' => 'HTML']);
+                return;
+            }
+
+            if ($command === 'whoami') {
+                $this->handleWhoAmI($chatId, $userId);
+                return;
+            }
+
+            if ($command === 'botusers') {
+                $this->handleBotUsers($chatId, $args);
+                return;
+            }
+
+            if ($command === 'linkedchat') {
+                $this->handleLinkedChat($chatId, $userId);
                 return;
             }
 
@@ -411,6 +428,9 @@ class UpdateHandler
                         return;
                     case 'forecast':
                         $this->handleForecast($chatId, $targetChatId, $cleanArgs);
+                        return;
+                    case 'modaudit':
+                        $this->handleModAudit($chatId, $targetChatId, $cleanArgs);
                         return;
                     case 'debughours':
                         $this->handleDebugHours($chatId, $targetChatId, $message, $cleanArgs);
@@ -1200,7 +1220,12 @@ class UpdateHandler
 
         $this->ensureChatMember($chatId, $target['id']);
         $this->setModStatus($chatId, $target['id'], true);
-        $this->tg->sendMessage($responseChatId, 'Mod added: ' . $this->displayName($target), ['parse_mode' => 'HTML']);
+        $this->sendReportMessage('Mod added: ' . $this->displayName($target), ['parse_mode' => 'HTML']);
+        $this->audit->log('mod_add', $message['from']['id'] ?? 0, (int)$chatId, [
+            'target_id' => $target['id'],
+            'target_username' => $target['username'] ?? null,
+            'target_name' => $this->formatUserLabel($target),
+        ]);
         if ($this->shouldLog('log_commands')) {
             Logger::infoContext(
                 'Mod added',
@@ -1229,7 +1254,12 @@ class UpdateHandler
 
         $this->ensureChatMember($chatId, $target['id']);
         $this->setModStatus($chatId, $target['id'], false);
-        $this->tg->sendMessage($responseChatId, 'Mod removed: ' . $this->displayName($target), ['parse_mode' => 'HTML']);
+        $this->sendReportMessage('Mod removed: ' . $this->displayName($target), ['parse_mode' => 'HTML']);
+        $this->audit->log('mod_remove', $message['from']['id'] ?? 0, (int)$chatId, [
+            'target_id' => $target['id'],
+            'target_username' => $target['username'] ?? null,
+            'target_name' => $this->formatUserLabel($target),
+        ]);
         if ($this->shouldLog('log_commands')) {
             Logger::infoContext(
                 'Mod removed',
@@ -1265,6 +1295,205 @@ class UpdateHandler
         if ($this->shouldLog('log_commands')) {
             Logger::infoContext('Mod list viewed', $this->logContextForChat($chatId, ['mods' => count($mods)]));
         }
+    }
+
+    private function handleModAudit(int|string $responseChatId, int|string $chatId, string $args): void
+    {
+        $limit = 20;
+        $tokens = preg_split('/\\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (is_numeric($token)) {
+                $limit = (int)$token;
+            }
+        }
+        $limit = max(1, min(50, $limit));
+
+        $rows = $this->db->fetchAll(
+            'SELECT al.action, al.actor_id, al.meta, al.created_at, u.username, u.first_name, u.last_name
+             FROM audit_log al
+             LEFT JOIN users u ON u.id = al.actor_id
+             WHERE al.chat_id = ? AND al.action IN ("mod_add", "mod_remove")
+             ORDER BY al.created_at DESC
+             LIMIT ' . $limit,
+            [$chatId]
+        );
+
+        if (empty($rows)) {
+            $this->sendReportMessage('No mod changes logged yet.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $settings = $this->settings->get($chatId);
+        $timezone = $settings['timezone'] ?? ($this->config['timezone'] ?? 'UTC');
+
+        $chatRow = $this->db->fetch('SELECT title FROM chats WHERE id = ? LIMIT 1', [$chatId]);
+        $chatTitle = $chatRow['title'] ?? ('Chat ' . $chatId);
+
+        $lines = [];
+        $lines[] = '<b>Mod Audit</b>';
+        $lines[] = $this->escape($chatTitle) . ' · Last ' . $limit . ' changes';
+        $lines[] = '';
+
+        foreach ($rows as $row) {
+            $meta = [];
+            if (!empty($row['meta'])) {
+                $decoded = json_decode((string)$row['meta'], true);
+                if (is_array($decoded)) {
+                    $meta = $decoded;
+                }
+            }
+            $targetLabel = 'Unknown';
+            if (!empty($meta['target_username'])) {
+                $targetLabel = '@' . $meta['target_username'];
+            } elseif (!empty($meta['target_name'])) {
+                $targetLabel = (string)$meta['target_name'];
+            } elseif (!empty($meta['target_id'])) {
+                $targetLabel = 'User ' . $meta['target_id'];
+            }
+
+            $actorLabel = $this->formatUserLabel([
+                'id' => $row['actor_id'] ?? null,
+                'username' => $row['username'] ?? null,
+                'first_name' => $row['first_name'] ?? null,
+                'last_name' => $row['last_name'] ?? null,
+            ]);
+
+            $action = $row['action'] === 'mod_remove' ? '-' : '+';
+            $when = $this->formatTimestamp((string)$row['created_at'], $timezone);
+
+            $lines[] = $when . ' · ' . $action . ' ' . $this->escape($targetLabel) . ' by ' . $this->escape($actorLabel);
+        }
+
+        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
+    }
+
+    private function handleLinkedChat(int|string $responseChatId, int|string $userId): void
+    {
+        $defaultChatId = $this->userSettings->getDefaultChatId($userId);
+        $lines = ['<b>Linked Chat</b>'];
+
+        if ($defaultChatId !== null) {
+            $row = $this->db->fetch('SELECT id, title FROM chats WHERE id = ? LIMIT 1', [$defaultChatId]);
+            $title = $row['title'] ?? 'Unknown chat';
+            $lines[] = 'Default: ' . $defaultChatId . ' · ' . $this->escape($title);
+        } else {
+            $lines[] = 'Default: not set';
+        }
+
+        $recent = $this->getUserChats($userId, 5);
+        if (!empty($recent)) {
+            $lines[] = '';
+            $lines[] = 'Recent chats:';
+            foreach ($recent as $chat) {
+                $title = $chat['title'] ?: 'Untitled';
+                $lines[] = $chat['id'] . ' | ' . $this->escape($title);
+            }
+        }
+
+        $lines[] = '';
+        $lines[] = 'Tip: set a default with /usechat &lt;chat_id&gt;';
+
+        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
+    }
+
+    private function handleWhoAmI(int|string $responseChatId, int|string $userId): void
+    {
+        $role = $this->isOwner($userId) ? 'Owner' : ($this->isManager($userId) ? 'Manager' : 'User');
+        $userRow = $this->db->fetch('SELECT id, username, first_name, last_name FROM users WHERE id = ? LIMIT 1', [$userId]);
+        $label = $this->formatUserLabel($userRow ?: ['id' => $userId]);
+
+        $defaultChatId = $this->userSettings->getDefaultChatId($userId);
+        $defaultLabel = 'not set';
+        if ($defaultChatId !== null) {
+            $row = $this->db->fetch('SELECT title FROM chats WHERE id = ? LIMIT 1', [$defaultChatId]);
+            $title = $row['title'] ?? 'Unknown chat';
+            $defaultLabel = $defaultChatId . ' · ' . $this->escape($title);
+        }
+
+        $lines = [
+            '<b>Who Am I</b>',
+            'User: ' . $this->escape($label),
+            'User ID: ' . $userId,
+            'Role: ' . $role,
+            'Default chat: ' . $defaultLabel,
+        ];
+
+        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
+    }
+
+    private function handleBotUsers(int|string $responseChatId, string $args): void
+    {
+        $days = 30;
+        $limit = 20;
+        $tokens = preg_split('/\\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (is_numeric($token)) {
+                if ($days === 30) {
+                    $days = (int)$token;
+                } else {
+                    $limit = (int)$token;
+                }
+            }
+        }
+        $days = max(1, min(365, $days));
+        $limit = max(1, min(50, $limit));
+
+        $since = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->modify('-' . $days . ' days')->format('Y-m-d H:i:s');
+        $rows = $this->db->fetchAll(
+            'SELECT al.actor_id, MIN(al.created_at) as first_seen, MAX(al.created_at) as last_seen, COUNT(*) as uses,
+                    u.username, u.first_name, u.last_name
+             FROM audit_log al
+             LEFT JOIN users u ON u.id = al.actor_id
+             WHERE al.action = "command_use" AND al.created_at >= ?
+             GROUP BY al.actor_id, u.username, u.first_name, u.last_name
+             ORDER BY last_seen DESC
+             LIMIT ' . $limit,
+            [$since]
+        );
+
+        if (empty($rows)) {
+            $this->sendReportMessage('No command usage logged yet.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $starts = $this->db->fetchAll(
+            'SELECT actor_id, MIN(created_at) as first_start
+             FROM audit_log
+             WHERE action = "start"
+             GROUP BY actor_id'
+        );
+        $startMap = [];
+        foreach ($starts as $startRow) {
+            $startMap[(int)$startRow['actor_id']] = $startRow['first_start'];
+        }
+
+        $timezone = $this->config['timezone'] ?? 'UTC';
+        $lines = [];
+        $lines[] = '<b>Bot Users</b>';
+        $lines[] = 'Last ' . $days . ' days · Top ' . $limit;
+        $lines[] = '';
+        $rank = 1;
+        foreach ($rows as $row) {
+            $label = $this->formatUserLabel([
+                'id' => $row['actor_id'] ?? null,
+                'username' => $row['username'] ?? null,
+                'first_name' => $row['first_name'] ?? null,
+                'last_name' => $row['last_name'] ?? null,
+            ]);
+            $firstSeen = $this->formatTimestamp((string)$row['first_seen'], $timezone);
+            $lastSeen = $this->formatTimestamp((string)$row['last_seen'], $timezone);
+            $startSeen = isset($startMap[(int)$row['actor_id']]) ? $this->formatTimestamp((string)$startMap[(int)$row['actor_id']], $timezone) : 'n/a';
+            $lines[] = $rank . '. ' . $this->escape($label) . ' · uses ' . (int)$row['uses'] . ' · last ' . $lastSeen . ' · first ' . $firstSeen . ' · start ' . $startSeen;
+            $rank++;
+        }
+
+        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
     }
 
     private function handlePlan(int|string $responseChatId, int|string $chatId): void
@@ -4502,6 +4731,9 @@ class UpdateHandler
                 'The bot stays silent in groups and does not DM mods.',
                 'Tip: set a default chat with /usechat &lt;chat_id&gt; to skip chat ids.',
                 '/mychats - list your group chats',
+                '/linkedchat (show default linked group)',
+                '/whoami (your bot role + id)',
+                '/botusers [days] [limit]',
                 '/usechat &lt;chat_id&gt; | /usechat &lt;title&gt; | /usechat off',
                 '/guide (full usage guide with examples)',
                 '/mydashboard [YYYY-MM]',
@@ -4555,6 +4787,7 @@ class UpdateHandler
                 '/modadd [chat_id] &lt;@username|user_id&gt;',
                 '/modremove [chat_id] &lt;@username|user_id&gt;',
                 '/modlist [chat_id]',
+                '/modaudit [chat_id] [limit]',
                 '/debughours [chat_id] [YYYY-MM] [@user]',
                 '/debughoursall [chat_id] [YYYY-MM]',
                 '/rosteradd &lt;@username|user_id&gt; &lt;role&gt; [notes]',
@@ -4605,6 +4838,8 @@ class UpdateHandler
             '<b>Step 2: Pick a default chat</b>',
             '<code>/mychats</code>',
             '<code>/usechat &lt;chat_id&gt;</code>',
+            '<code>/linkedchat</code>',
+            '<code>/whoami</code>',
             '',
             '<b>Step 3: Add mods</b>',
             '<code>/modadd @alex</code>',
@@ -4663,6 +4898,9 @@ class UpdateHandler
             '',
             '<b>Multi-chat summary</b>',
             '<code>/summary 2026-02 12000</code>',
+            '',
+            '<b>Audit</b>',
+            '<code>/modaudit 25</code>',
         ]);
 
         $parts[] = implode("\n", [
@@ -4680,6 +4918,9 @@ class UpdateHandler
             '<b>Report delivery</b>',
             'Set <code>reports.channel_id</code> in config.local.php to your reports-only channel.',
             'Reports go to that channel + manager DMs. Mod DMs are disabled by default.',
+            '',
+            '<b>Admin audit</b>',
+            '<code>/botusers 30 20</code> (users who ran commands)',
             '',
             '<b>Approvals + audit log</b>',
             '<code>/approval on</code>',
@@ -4965,6 +5206,39 @@ class UpdateHandler
             'user_name' => $name !== '' ? $name : null,
         ];
         return $cache[$key];
+    }
+
+    private function logCommandAudit(array $message, array $parsed, string $chatType): void
+    {
+        $userId = $message['from']['id'] ?? null;
+        if (!$userId) {
+            return;
+        }
+        if ($chatType !== 'private') {
+            return;
+        }
+        $chatId = $message['chat']['id'] ?? null;
+        $command = $parsed['command'] ?? '';
+        if ($command === '') {
+            return;
+        }
+        $this->audit->log('command_use', $userId, $chatId ? (int)$chatId : null, [
+            'command' => $command,
+        ]);
+        if ($command === 'start') {
+            $this->audit->log('start', $userId, $chatId ? (int)$chatId : null, []);
+        }
+    }
+
+    private function formatTimestamp(string $utcTimestamp, string $timezone): string
+    {
+        try {
+            $dt = new DateTimeImmutable($utcTimestamp, new DateTimeZone('UTC'));
+            $local = $dt->setTimezone(new DateTimeZone($timezone));
+            return $local->format('Y-m-d H:i');
+        } catch (Throwable $e) {
+            return $utcTimestamp;
+        }
     }
 
     private function formatUserLabel(array $user): string
