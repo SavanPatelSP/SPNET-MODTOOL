@@ -441,6 +441,7 @@ Send analytics and reward reports to a dedicated reports-only channel (no logs).
 2. Set `reports.channel_id` in `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` (format: `-1001234567890`).
 3. Reports will also be sent to all `manager_user_ids` + `owner_user_ids`.
 4. To allow mod DMs for micro-feedback, set `reports.send_to_mods = true`.
+5. Set `reports.detailed_channel = true` to add a detailed header + unique Report ID in the channel.
 
 ## Google Sheets Export (optional)
 This uses a webhook URL from Google Apps Script. Set `google_sheets.webhook_url` in `config.local.php`.

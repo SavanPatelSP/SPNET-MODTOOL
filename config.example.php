@@ -337,6 +337,10 @@ return [
         'send_to_managers' => true,
         // Allow mod DMs for micro-feedback (default false)
         'send_to_mods' => false,
+        // Add detailed header + report id in the reports channel
+        'detailed_channel' => true,
+        // Optional brand override for report headers
+        'brand_name' => null,
     ],
 
     // Log channel (optional)

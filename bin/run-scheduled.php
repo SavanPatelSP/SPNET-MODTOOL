@@ -57,6 +57,19 @@ function percentDrop(float $current, float $previous): ?float
     return round($drop, 1);
 }
 
+function buildReportMeta(array $config, ?int $chatId, string $chatTitle, string $reportType, ?string $period = null, ?float $budget = null, ?string $timezone = null): array
+{
+    $timezone = $timezone ?: ($config['timezone'] ?? 'UTC');
+    return [
+        'report_type' => $reportType,
+        'chat_id' => $chatId,
+        'chat_title' => $chatTitle,
+        'period' => $period,
+        'budget' => $budget,
+        'timezone' => $timezone,
+    ];
+}
+
 function escapeHtml(string $value): string
 {
     return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
@@ -396,7 +409,10 @@ foreach ($rows as $row) {
                     $filePath = $rewardSheet->generate($chatId, $targetMonth, $budget);
                     $caption = 'Auto report for ' . $stats['range']['label'] . ' (budget: ' . number_format($budget, 2) . ')';
 
-                    $sent = $reporter->sendDocument($filePath, $caption);
+                    $chatRow = $db->fetch('SELECT title FROM chats WHERE id = ? LIMIT 1', [$chatId]);
+                    $chatTitle = $chatRow['title'] ?? ('Chat ' . $chatId);
+                    $meta = buildReportMeta($config, (int)$chatId, $chatTitle, 'Auto Report', $stats['range']['label'] ?? null, $budget, $timezone);
+                    $sent = $reporter->sendDocument($filePath, $caption, ['report_meta' => $meta]);
                     if ($sent) {
                         $settingsService->updateAutoReportLast($chatId, $targetMonth);
                         Logger::info('Auto report sent for chat ' . $chatId . ' month ' . $targetMonth);
@@ -411,7 +427,7 @@ foreach ($rows as $row) {
                             foreach ($top as $mod) {
                                 $lines[] = 'Congrats ' . $mod['display_name'] . ' for top performance! Reward: ' . number_format($mod['reward'], 2);
                             }
-                            $reporter->sendMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
+                            $reporter->sendMessage(implode("\n", $lines), ['parse_mode' => 'HTML', 'report_meta' => $meta]);
                             $notifications->markSent($chatId, 'congrats', $targetMonth);
                         }
                     } else {
@@ -577,7 +593,10 @@ foreach ($rows as $row) {
                     $filePath = $rewardSheet->generate($chatId, null, $budget, $stats, $suffix);
                     $caption = 'Progress report (MTD) for ' . $stats['range']['label'] . ' (budget: ' . number_format($budget, 2) . ')';
 
-                    $sent = $reporter->sendDocument($filePath, $caption);
+                    $chatRow = $db->fetch('SELECT title FROM chats WHERE id = ? LIMIT 1', [$chatId]);
+                    $chatTitle = $chatRow['title'] ?? ('Chat ' . $chatId);
+                    $meta = buildReportMeta($config, (int)$chatId, $chatTitle, 'Progress Report (MTD)', $stats['range']['label'] ?? null, $budget, $timezone);
+                    $sent = $reporter->sendDocument($filePath, $caption, ['report_meta' => $meta]);
                     if ($sent) {
                         $settingsService->updateProgressReportLast($chatId, $targetMonth);
                         Logger::info('Progress report sent for chat ' . $chatId . ' month ' . $targetMonth);
@@ -594,7 +613,7 @@ foreach ($rows as $row) {
                             }
                             if (!empty($atRisk)) {
                                 $lines = ['Mid-month at-risk mods:', implode(', ', $atRisk)];
-                                $reporter->sendMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
+                                $reporter->sendMessage(implode("\n", $lines), ['parse_mode' => 'HTML', 'report_meta' => $meta]);
                                 $notifications->markSent($chatId, 'mid_month_alert', $targetMonth);
                             }
                         }
@@ -749,7 +768,8 @@ foreach ($rows as $row) {
 
                     $tldr = buildWeeklyTldr($stats, $chatTitle, 7);
                     $message = implode("\n", $lines);
-                    $sent = $reporter->sendMessage($tldr, ['parse_mode' => 'HTML']);
+                    $meta = buildReportMeta($config, (int)$chatId, $chatTitle, 'Weekly Summary', $stats['range']['label'] ?? null, null, $timezone);
+                    $sent = $reporter->sendMessage($tldr, ['parse_mode' => 'HTML', 'report_meta' => $meta]);
                     $sent = $reporter->sendMessage($message, ['parse_mode' => 'HTML']) || $sent;
                     if ($sent) {
                         $settingsService->updateWeeklySummaryLast($chatId, $weekKey);

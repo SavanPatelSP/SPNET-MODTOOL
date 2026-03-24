@@ -553,7 +553,8 @@ class UpdateHandler
         }
 
         $text = $this->formatStatsMessage($target, $stats['range']);
-        $this->sendReportMessage($text, ['parse_mode' => 'HTML']);
+        $meta = $this->buildReportMeta((int)$chatId, 'Mod Stats', $stats['range']['label'] ?? null, null);
+        $this->sendReportMessageWithMeta($text, $meta, ['parse_mode' => 'HTML']);
     }
 
     private function handleDebugHours(int|string $responseChatId, int|string $chatId, array $message, string $args): void
@@ -619,7 +620,8 @@ class UpdateHandler
         $lines[] = 'Days active: ' . number_format((int)($target['days_active'] ?? 0));
         $lines[] = 'Membership minutes (raw) are derived from join/leave events.';
         $lines[] = 'Active minutes (raw) are computed from message timestamps and gap settings.';
-        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
+        $meta = $this->buildReportMeta((int)$chatId, 'Coaching Report', $report['range']['label'] ?? null, null);
+        $this->sendReportMessageWithMeta(implode("\n", $lines), $meta, ['parse_mode' => 'HTML']);
     }
 
     private function handleDebugHoursAll(int|string $responseChatId, int|string $chatId, string $args): void
@@ -850,7 +852,8 @@ class UpdateHandler
                 ' vs ' . ($trendB !== null ? (($trendB >= 0 ? '+' : '') . number_format((float)$trendB, 1) . '%') : 'N/A');
         }
 
-        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
+        $meta = $this->buildReportMeta((int)$chatId, 'Team Health', $report['range']['label'] ?? null, null);
+        $this->sendReportMessageWithMeta(implode("\n", $lines), $meta, ['parse_mode' => 'HTML']);
     }
 
     private function handleFindUser(int|string $responseChatId, int|string $chatId, string $args): void
@@ -910,7 +913,8 @@ class UpdateHandler
             $role = !empty($row['is_mod']) ? 'mod' : 'member';
             $lines[] = $row['id'] . ' | ' . $this->displayName($row) . ' | ' . $role;
         }
-        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
+        $meta = $this->buildReportMeta((int)$chatId, 'AI Performance Review', $report['range']['label'] ?? null, null);
+        $this->sendReportMessageWithMeta(implode("\n", $lines), $meta, ['parse_mode' => 'HTML']);
     }
 
     private function handleLeaderboard(int|string $responseChatId, int|string $chatId, string $args): void
@@ -949,7 +953,8 @@ class UpdateHandler
         $context['actor_id'] = (int)$responseChatId;
         $ranked = $this->rewards->rankAndReward($stats['mods'], $budget, $context);
         $text = $this->formatLeaderboardMessage($ranked, $stats['range'], $budget);
-        $this->sendReportMessage($text, ['parse_mode' => 'HTML']);
+        $meta = $this->buildReportMeta((int)$chatId, 'Leaderboard', $stats['range']['label'] ?? null, $budget);
+        $this->sendReportMessageWithMeta($text, $meta, ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_reports')) {
             Logger::infoContext(
                 'Leaderboard generated',
@@ -993,7 +998,8 @@ class UpdateHandler
 
         $filePath = $this->rewardSheet->generate($chatId, $month, $budget);
         $caption = 'Reward sheet for ' . $stats['range']['label'] . ' (budget: ' . number_format($budget, 2) . ')';
-        $this->sendReportDocument($filePath, $caption);
+        $meta = $this->buildReportMeta((int)$chatId, 'Reward Sheet', $stats['range']['label'] ?? null, $budget);
+        $this->sendReportDocumentWithMeta($filePath, $caption, $meta);
         if ($this->shouldLog('log_reports')) {
             Logger::infoContext(
                 'Reward sheet generated',
@@ -1038,7 +1044,8 @@ class UpdateHandler
 
         $filePath = $this->rewardCsv->generate($chatId, $month, $budget);
         $caption = 'CSV reward sheet for ' . $stats['range']['label'] . ' (budget: ' . number_format($budget, 2) . ')';
-        $this->sendReportDocument($filePath, $caption);
+        $meta = $this->buildReportMeta((int)$chatId, 'Reward CSV', $stats['range']['label'] ?? null, $budget);
+        $this->sendReportDocumentWithMeta($filePath, $caption, $meta);
         if ($this->shouldLog('log_reports')) {
             Logger::infoContext(
                 'Reward CSV generated',
@@ -1098,7 +1105,10 @@ class UpdateHandler
         if ($budget !== null) {
             $caption .= ' (budget: ' . number_format($budget, 2) . ')';
         }
-        $this->sendReportDocument($filePath, $caption);
+        $meta = $this->buildReportMeta(null, 'Multi-chat Summary', $label, $budget, [
+            'chat_title' => 'All Chats',
+        ]);
+        $this->sendReportDocumentWithMeta($filePath, $caption, $meta);
         if ($this->shouldLog('log_reports')) {
             Logger::infoContext(
                 'Multi-chat summary generated',
@@ -1291,7 +1301,8 @@ class UpdateHandler
         foreach ($mods as $mod) {
             $lines[] = $mod['id'] . ' | ' . $this->displayName($mod);
         }
-        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
+        $meta = $this->buildReportMeta((int)$chatId, 'Retention Alerts', $report['range']['label'] ?? null, null);
+        $this->sendReportMessageWithMeta(implode("\n", $lines), $meta, ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_commands')) {
             Logger::infoContext('Mod list viewed', $this->logContextForChat($chatId, ['mods' => count($mods)]));
         }
@@ -1367,7 +1378,8 @@ class UpdateHandler
             $lines[] = $when . ' · ' . $action . ' ' . $this->escape($targetLabel) . ' by ' . $this->escape($actorLabel);
         }
 
-        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
+        $meta = $this->buildReportMeta((int)$chatId, 'Mod Audit', null, null);
+        $this->sendReportMessageWithMeta(implode("\n", $lines), $meta, ['parse_mode' => 'HTML']);
     }
 
     private function handleLinkedChat(int|string $responseChatId, int|string $userId): void
@@ -1396,7 +1408,10 @@ class UpdateHandler
         $lines[] = '';
         $lines[] = 'Tip: set a default with /usechat &lt;chat_id&gt;';
 
-        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
+        $meta = $this->buildReportMeta(null, 'Bot Users', 'Last ' . $days . ' days', null, [
+            'chat_title' => 'Bot Usage',
+        ]);
+        $this->sendReportMessageWithMeta(implode("\n", $lines), $meta, ['parse_mode' => 'HTML']);
     }
 
     private function handleWhoAmI(int|string $responseChatId, int|string $userId): void
@@ -2198,7 +2213,8 @@ class UpdateHandler
 
         $file = $this->trendReport->generate($chatId, $month, $budget);
         $caption = 'Trend report for ' . $stats['range']['label'];
-        $this->sendReportDocument($file, $caption);
+        $meta = $this->buildReportMeta((int)$chatId, 'Trend Report', $stats['range']['label'] ?? null, $budget);
+        $this->sendReportDocumentWithMeta($file, $caption, $meta);
         if ($this->shouldLog('log_reports')) {
             Logger::infoContext(
                 'Trend report generated',
@@ -2236,7 +2252,8 @@ class UpdateHandler
 
         $file = $this->executiveSummary->generate($chatId, $month, $budget);
         $caption = 'Executive summary for ' . $stats['range']['label'];
-        $this->sendReportDocument($file, $caption);
+        $meta = $this->buildReportMeta((int)$chatId, 'Executive Summary', $stats['range']['label'] ?? null, $budget);
+        $this->sendReportDocumentWithMeta($file, $caption, $meta);
         if ($this->shouldLog('log_reports')) {
             Logger::infoContext(
                 'Executive summary generated',
@@ -3302,8 +3319,9 @@ class UpdateHandler
 
         $lines = $this->buildWeeklySummaryLines($chatId, $stats, $days);
         $tldr = $this->buildWeeklySummaryTldr($chatId, $stats, $days);
+        $meta = $this->buildReportMeta((int)$chatId, 'Weekly Summary', $stats['range']['label'] ?? null, null);
         if ($tldr !== '') {
-            $this->sendReportMessage($tldr, ['parse_mode' => 'HTML']);
+            $this->sendReportMessageWithMeta($tldr, $meta, ['parse_mode' => 'HTML']);
         }
         $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
     }
@@ -4230,7 +4248,8 @@ class UpdateHandler
         }
 
         $message = implode("\n", $lines);
-        $this->sendReportMessage($message, ['parse_mode' => 'HTML']);
+        $meta = $this->buildReportMeta((int)$chatId, 'Activity Rankings', $rangeLabel, null);
+        $this->sendReportMessageWithMeta($message, $meta, ['parse_mode' => 'HTML']);
     }
 
     private function buildActivityRanks(array $mods, int $topN): array
@@ -4318,7 +4337,8 @@ class UpdateHandler
         $suffix = ($bundle['range']['month'] ?? 'mtd') . '-mtd';
         $filePath = $this->rewardSheet->generate($chatId, null, $budget, $bundle, $suffix);
         $caption = 'Progress report (MTD) for ' . $bundle['range']['label'] . ' (budget: ' . number_format($budget, 2) . ')';
-        $this->sendReportDocument($filePath, $caption);
+        $meta = $this->buildReportMeta((int)$chatId, 'Progress Report (MTD)', $bundle['range']['label'] ?? null, $budget);
+        $this->sendReportDocumentWithMeta($filePath, $caption, $meta);
         if ($this->shouldLog('log_reports')) {
             Logger::infoContext(
                 'Progress report generated',
@@ -4396,7 +4416,8 @@ class UpdateHandler
         $lines[] = 'Index: ' . number_format((float)$forecast['projected_index'], 1) . ' (baseline ' . number_format((float)$forecast['baseline_index'], 1) . ')';
         $lines[] = 'Budget: ' . number_format($budget, 2) . ' → ' . number_format((float)$forecast['forecast_budget'], 2) . ' (' . $deltaLabel . ')';
 
-        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
+        $meta = $this->buildReportMeta((int)$chatId, 'Reward Forecast', $mtdBundle['range']['label'] ?? null, $budget);
+        $this->sendReportMessageWithMeta(implode("\n", $lines), $meta, ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_reports')) {
             Logger::infoContext('Forecast generated', $this->logContextForChat($chatId, [
                 'month' => $currentMonthKey,
@@ -5271,9 +5292,48 @@ class UpdateHandler
         $this->reporter->sendMessage($text, $options, $limit);
     }
 
+    private function sendReportMessageWithMeta(string $text, array $meta, array $options = [], int $limit = 3500): void
+    {
+        $options['report_meta'] = $meta;
+        $this->reporter->sendMessage($text, $options, $limit);
+    }
+
     private function sendReportDocument(string $filePath, string $caption = '', array $options = []): void
     {
         $this->reporter->sendDocument($filePath, $caption, $options);
+    }
+
+    private function sendReportDocumentWithMeta(string $filePath, string $caption, array $meta, array $options = []): void
+    {
+        $options['report_meta'] = $meta;
+        $this->reporter->sendDocument($filePath, $caption, $options);
+    }
+
+    private function buildReportMeta(?int $chatId, string $reportType, ?string $period = null, ?float $budget = null, array $extra = []): array
+    {
+        $chatTitle = null;
+        $timezone = $this->config['timezone'] ?? 'UTC';
+        if ($chatId !== null) {
+            $row = $this->db->fetch('SELECT title FROM chats WHERE id = ? LIMIT 1', [$chatId]);
+            $chatTitle = $row['title'] ?? ('Chat ' . $chatId);
+            $settings = $this->settings->get($chatId);
+            $timezone = $settings['timezone'] ?? $timezone;
+        }
+
+        $meta = [
+            'report_type' => $reportType,
+            'chat_id' => $chatId,
+            'chat_title' => $chatTitle,
+            'period' => $period,
+            'budget' => $budget,
+            'timezone' => $timezone,
+        ];
+
+        foreach ($extra as $key => $value) {
+            $meta[$key] = $value;
+        }
+
+        return $meta;
     }
 
     private function escape(string $value): string
