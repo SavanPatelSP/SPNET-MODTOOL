@@ -329,6 +329,16 @@ return [
         'base_url' => 'http://127.0.0.1:8000',
     ],
 
+    // Report delivery (analytics + rewards)
+    'reports' => [
+        // Separate channel for reports only (no logs). Example: -1001234567890
+        'channel_id' => null,
+        // Also send reports to all managers + owners in private chat
+        'send_to_managers' => true,
+        // Allow mod DMs for micro-feedback (default false)
+        'send_to_mods' => false,
+    ],
+
     // Log channel (optional)
     'logging' => [
         'channel_id' => null,        // Telegram channel id (e.g. -1001234567890)

@@ -15,6 +15,7 @@ use App\Services\NotificationService;
 use App\Services\PerformanceReviewService;
 use App\Services\RetentionRiskService;
 use App\Services\AuditLogService;
+use App\Services\ReportChannelService;
 use App\Reports\RewardSheet;
 use App\Logger;
 use App\Services\ChangelogService;
@@ -28,6 +29,7 @@ if (!$token || $token === 'YOUR_TELEGRAM_BOT_TOKEN') {
 $db = new Database($config['db']);
 $tg = new Telegram($token, $config['telegram'] ?? []);
 Logger::initChannel($tg, $config);
+$reporter = new ReportChannelService($tg, $config);
 $changelog = new ChangelogService();
 $changelog->sendIfUpdated($tg, $config, 'scheduler');
 $settingsService = new SettingsService($db, $config);
@@ -42,37 +44,6 @@ $notifications = new NotificationService($db);
 $performanceReview = new PerformanceReviewService($statsService, $settingsService, $config);
 $retentionRisk = new RetentionRiskService($statsService, $settingsService, $config);
 $rewardSheet = new RewardSheet($statsService, $rewardService, $config, $rewardContext, $rewardHistory, $archive);
-
-function sendChunkedMessage(Telegram $tg, int|string $chatId, string $text, int $limit = 3500): void
-{
-    $lines = explode("\n", $text);
-    $chunks = [];
-    $current = '';
-    foreach ($lines as $line) {
-        $candidate = $current === '' ? $line : $current . "\n" . $line;
-        if (strlen($candidate) > $limit) {
-            if ($current !== '') {
-                $chunks[] = $current;
-                $current = $line;
-                continue;
-            }
-            $longParts = str_split($line, $limit);
-            foreach ($longParts as $part) {
-                $chunks[] = $part;
-            }
-            $current = '';
-            continue;
-        }
-        $current = $candidate;
-    }
-    if ($current !== '') {
-        $chunks[] = $current;
-    }
-
-    foreach ($chunks as $chunk) {
-        $tg->sendMessage($chatId, $chunk, ['parse_mode' => 'HTML']);
-    }
-}
 
 function percentDrop(float $current, float $previous): ?float
 {
@@ -391,9 +362,6 @@ function buildMicroFeedbackMessage(array $mod, string $chatTitle, string $dateLa
 
 $ownerIds = $config['owner_user_ids'] ?? [];
 $ownerIds = array_values(array_filter(array_map('intval', is_array($ownerIds) ? $ownerIds : [])));
-$managerIds = $config['manager_user_ids'] ?? [];
-$managerIds = array_values(array_filter(array_map('intval', is_array($managerIds) ? $managerIds : [])));
-$ownerDmEnabled = (bool)($config['premium']['notifications']['owner_dm'] ?? true);
 $midMonthEnabled = (bool)($config['premium']['notifications']['mid_month_alert'] ?? true);
 $congratsEnabled = (bool)($config['premium']['notifications']['congrats'] ?? true);
 
@@ -428,16 +396,10 @@ foreach ($rows as $row) {
                     $filePath = $rewardSheet->generate($chatId, $targetMonth, $budget);
                     $caption = 'Auto report for ' . $stats['range']['label'] . ' (budget: ' . number_format($budget, 2) . ')';
 
-                    $resp = $tg->sendDocument($chatId, $filePath, $caption);
-                    if ($resp['ok'] ?? false) {
+                    $sent = $reporter->sendDocument($filePath, $caption);
+                    if ($sent) {
                         $settingsService->updateAutoReportLast($chatId, $targetMonth);
                         Logger::info('Auto report sent for chat ' . $chatId . ' month ' . $targetMonth);
-                        if ($isPremium && $ownerDmEnabled && !empty($ownerIds) && !$notifications->wasSent($chatId, 'auto_report_owner', $targetMonth)) {
-                            foreach ($ownerIds as $ownerId) {
-                                $tg->sendDocument($ownerId, $filePath, $caption);
-                            }
-                            $notifications->markSent($chatId, 'auto_report_owner', $targetMonth);
-                        }
                         if ($isPremium && $congratsEnabled && !empty($ownerIds) && !$notifications->wasSent($chatId, 'congrats', $targetMonth)) {
                             $context = $rewardContext->build($chatId, $targetMonth);
                             $context['chat_id'] = (int)$chatId;
@@ -449,9 +411,7 @@ foreach ($rows as $row) {
                             foreach ($top as $mod) {
                                 $lines[] = 'Congrats ' . $mod['display_name'] . ' for top performance! Reward: ' . number_format($mod['reward'], 2);
                             }
-                            foreach ($ownerIds as $ownerId) {
-                                $tg->sendMessage($ownerId, implode("\n", $lines), ['parse_mode' => 'HTML']);
-                            }
+                            $reporter->sendMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
                             $notifications->markSent($chatId, 'congrats', $targetMonth);
                         }
                     } else {
@@ -481,13 +441,7 @@ foreach ($rows as $row) {
                         $lines = $performanceReview->buildLines($report, $chatTitle);
                         $message = implode("\n", $lines);
 
-                        $targets = !empty($managerIds) ? $managerIds : $ownerIds;
-                        if (empty($targets)) {
-                            Logger::info('AI review skipped for chat ' . $chatId . ' (no managers)');
-                        } else {
-                            foreach ($targets as $managerId) {
-                                sendChunkedMessage($tg, $managerId, $message);
-                            }
+                        if ($reporter->sendMessage($message, ['parse_mode' => 'HTML'])) {
                             $settingsService->updateAiReviewLast($chatId, $targetMonth);
                             Logger::info('AI review sent for chat ' . $chatId . ' month ' . $targetMonth);
                         }
@@ -516,13 +470,7 @@ foreach ($rows as $row) {
                         $lines = $retentionRisk->buildLines($report, $chatTitle);
                         $message = implode("\n", $lines);
 
-                        $targets = !empty($managerIds) ? $managerIds : $ownerIds;
-                        if (empty($targets)) {
-                            Logger::info('Retention alerts skipped for chat ' . $chatId . ' (no managers)');
-                        } else {
-                            foreach ($targets as $managerId) {
-                                sendChunkedMessage($tg, $managerId, $message);
-                            }
+                        if ($reporter->sendMessage($message, ['parse_mode' => 'HTML'])) {
                             $settingsService->updateRetentionAlertLast($chatId, $targetMonth);
                             Logger::info('Retention alerts sent for chat ' . $chatId . ' month ' . $targetMonth);
                         }
@@ -601,12 +549,8 @@ foreach ($rows as $row) {
                                 $lines[] = '• ' . $reason;
                             }
 
-                            $targets = !empty($managerIds) ? $managerIds : $ownerIds;
-                            if (!empty($targets)) {
-                                $message = implode("\n", $lines);
-                                foreach ($targets as $managerId) {
-                                    $tg->sendMessage($managerId, $message, ['parse_mode' => 'HTML']);
-                                }
+                            $message = implode("\n", $lines);
+                            if ($reporter->sendMessage($message, ['parse_mode' => 'HTML'])) {
                                 $notifications->markSent($chatId, 'inactivity_spike', $period);
                                 Logger::info('Inactivity spike alert sent for chat ' . $chatId . ' date ' . $period);
                             }
@@ -633,16 +577,10 @@ foreach ($rows as $row) {
                     $filePath = $rewardSheet->generate($chatId, null, $budget, $stats, $suffix);
                     $caption = 'Progress report (MTD) for ' . $stats['range']['label'] . ' (budget: ' . number_format($budget, 2) . ')';
 
-                    $resp = $tg->sendDocument($chatId, $filePath, $caption);
-                    if ($resp['ok'] ?? false) {
+                    $sent = $reporter->sendDocument($filePath, $caption);
+                    if ($sent) {
                         $settingsService->updateProgressReportLast($chatId, $targetMonth);
                         Logger::info('Progress report sent for chat ' . $chatId . ' month ' . $targetMonth);
-                        if ($isPremium && $ownerDmEnabled && !empty($ownerIds) && !$notifications->wasSent($chatId, 'progress_owner', $targetMonth)) {
-                            foreach ($ownerIds as $ownerId) {
-                                $tg->sendDocument($ownerId, $filePath, $caption);
-                            }
-                            $notifications->markSent($chatId, 'progress_owner', $targetMonth);
-                        }
                         if ($isPremium && $midMonthEnabled && !empty($ownerIds) && !$notifications->wasSent($chatId, 'mid_month_alert', $targetMonth)) {
                             $eligibility = $config['eligibility'] ?? [];
                             $minDays = (int)($eligibility['min_days_active'] ?? 0);
@@ -656,9 +594,7 @@ foreach ($rows as $row) {
                             }
                             if (!empty($atRisk)) {
                                 $lines = ['Mid-month at-risk mods:', implode(', ', $atRisk)];
-                                foreach ($ownerIds as $ownerId) {
-                                    $tg->sendMessage($ownerId, implode("\n", $lines), ['parse_mode' => 'HTML']);
-                                }
+                                $reporter->sendMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
                                 $notifications->markSent($chatId, 'mid_month_alert', $targetMonth);
                             }
                         }
@@ -811,18 +747,11 @@ foreach ($rows as $row) {
                         }
                     }
 
-                    $targets = !empty($managerIds) ? $managerIds : $ownerIds;
-                    if (empty($targets)) {
-                        Logger::info('Weekly summary skipped for chat ' . $chatId . ' (no managers)');
-                    } else {
-                        $tldr = buildWeeklyTldr($stats, $chatTitle, 7);
-                        foreach ($targets as $managerId) {
-                            $tg->sendMessage($managerId, $tldr, ['parse_mode' => 'HTML']);
-                        }
-                        $message = implode("\n", $lines);
-                        foreach ($targets as $managerId) {
-                            $tg->sendMessage($managerId, $message, ['parse_mode' => 'HTML']);
-                        }
+                    $tldr = buildWeeklyTldr($stats, $chatTitle, 7);
+                    $message = implode("\n", $lines);
+                    $sent = $reporter->sendMessage($tldr, ['parse_mode' => 'HTML']);
+                    $sent = $reporter->sendMessage($message, ['parse_mode' => 'HTML']) || $sent;
+                    if ($sent) {
                         $settingsService->updateWeeklySummaryLast($chatId, $weekKey);
                         Logger::info('Weekly summary sent for chat ' . $chatId . ' week ' . $weekKey);
                     }
@@ -882,12 +811,8 @@ foreach ($rows as $row) {
                             $lines[] = '• ' . htmlspecialchars($name, ENT_QUOTES, 'UTF-8');
                         }
 
-                        $targets = !empty($managerIds) ? $managerIds : $ownerIds;
-                        if (!empty($targets)) {
-                            $message = implode("\n", $lines);
-                            foreach ($targets as $managerId) {
-                                $tg->sendMessage($managerId, $message, ['parse_mode' => 'HTML']);
-                            }
+                        $message = implode("\n", $lines);
+                        if ($reporter->sendMessage($message, ['parse_mode' => 'HTML'])) {
                             $notifications->markSent($chatId, 'inactivity_alert', $period);
                             Logger::info('Inactivity alert sent for chat ' . $chatId . ' date ' . $period);
                         }
@@ -898,6 +823,10 @@ foreach ($rows as $row) {
     }
 
     if (!empty($row['daily_feedback_enabled'])) {
+        $allowModDms = (bool)($config['reports']['send_to_mods'] ?? false);
+        if (!$allowModDms) {
+            Logger::info('Daily micro-feedback skipped for chat ' . $chatId . ' (mod DMs disabled)');
+        } else {
         $hour = (int)($row['daily_feedback_hour'] ?? 20);
         if ($currentHour >= $hour) {
             $todayKey = $nowLocal->format('Y-m-d');
@@ -917,6 +846,7 @@ foreach ($rows as $row) {
                     Logger::info('Daily micro-feedback sent for chat ' . $chatId . ' date ' . $todayKey);
                 }
             }
+        }
         }
     }
 }

@@ -158,6 +158,7 @@ Private chat commands:
 - `/autoprogress off [chat_id]`
 - `/autoprogress status [chat_id]`
 - `/progress [chat_id] [budget]` (month-to-date)
+- `/forecast [chat_id] [budget]` (current month forecast)
 - `/modadd [chat_id] <@username|user_id>`
 - `/modremove [chat_id] <@username|user_id>`
 - `/modlist [chat_id]`
@@ -226,6 +227,8 @@ If you do not pass a budget, it will still rank mods and output reward suggestio
 ```text
 /progress
 /progress 7500
+/forecast
+/forecast 7500
 ```
 
 ### 6) Multi-chat summary (combined view)
@@ -346,12 +349,14 @@ Ensure `polling.allowed_updates` includes `pre_checkout_query` for Stars payment
 
 ### 17) Troubleshooting
 - Bot not responding: check DNS/network on the host, then run `curl -I https://api.telegram.org`.
+- Bot silent in groups: expected (reports go to the reports channel + manager DMs).
 - "No permission": ensure you are an admin in that group or add your user id to `owner_user_ids` in `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php`.
 - "No mods are added": run `/modadd` first.
 - "No group chats found": add the bot to a group and send any message there, then run `/mychats`.
 
 ## Notes
 - Moderation commands are disabled; the bot is analytics-only.
+- The bot stays silent in groups and does not DM mods. Reports go to the reports channel + manager DMs.
 - “Active time” is estimated from message gaps (configurable).
 - “Membership time” is time between join and leave events, not actual presence.
 - Scoring uses log/sqrt scaling and day normalization. Tune it in `score_weights` and `score_rules`.
@@ -413,6 +418,13 @@ Send bot logs + changelog updates to a Telegram channel.
 2. Set `logging.channel_id` in `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` (format: `-1001234567890`).
 3. Optional: set `logging.log_updates = true` to log every message update (very noisy).
 
+## Reports Channel
+Send analytics and reward reports to a dedicated reports-only channel (no logs).
+1. Create a channel and add the bot as admin.
+2. Set `reports.channel_id` in `/Users/savanpatel/Documents/SPNET-MODTOOL/config.local.php` (format: `-1001234567890`).
+3. Reports will also be sent to all `manager_user_ids` + `owner_user_ids`.
+4. To allow mod DMs for micro-feedback, set `reports.send_to_mods = true`.
+
 ## Google Sheets Export (optional)
 This uses a webhook URL from Google Apps Script. Set `google_sheets.webhook_url` in `config.local.php`.
 
@@ -435,6 +447,7 @@ function doPost(e) {
 Run this script hourly via cron (or a scheduler):
 - `php /Users/savanpatel/Documents/SPNET-MODTOOL/bin/run-scheduled.php`
 It sends the previous month’s report on the configured day/hour in the chat’s timezone.
+Reports and progress sheets are delivered to `reports.channel_id` + manager DMs.
 Progress reports (MTD) are sent when `/autoprogress` is enabled.
 
 ## Import ChatKeeper CSV (for backfill)

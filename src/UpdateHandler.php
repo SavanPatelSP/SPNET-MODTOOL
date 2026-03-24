@@ -20,6 +20,7 @@ use App\Services\ArchiveService;
 use App\Services\ReportApprovalService;
 use App\Services\AuditLogService;
 use App\Services\PaymentService;
+use App\Services\ReportChannelService;
 use App\Reports\RewardSheet;
 use App\Reports\RewardCsv;
 use App\Reports\MultiChatReport;
@@ -59,6 +60,7 @@ class UpdateHandler
     private TrendReport $trendReport;
     private TimesheetCsv $timesheetCsv;
     private GoogleSheetsService $googleSheets;
+    private ReportChannelService $reporter;
 
     public function __construct(Database $db, Telegram $tg, array $config)
     {
@@ -90,6 +92,7 @@ class UpdateHandler
         $this->trendReport = new TrendReport($this->stats, $this->rewards, $config, $this->rewardContext, $this->archive);
         $this->timesheetCsv = new TimesheetCsv($this->stats);
         $this->googleSheets = new GoogleSheetsService($config);
+        $this->reporter = new ReportChannelService($tg, $config);
     }
 
     public function handleUpdate(array $update): void
@@ -120,9 +123,6 @@ class UpdateHandler
         $chatType = $chat['type'] ?? 'private';
 
         if ($chatType !== 'private' && !$this->isWhitelisted($chatId)) {
-            if (!empty($message['text']) && $this->parseCommand($message['text'])) {
-                $this->tg->sendMessage($chatId, 'This bot is not authorized for this chat.', ['parse_mode' => 'HTML']);
-            }
             return;
         }
 
@@ -237,7 +237,7 @@ class UpdateHandler
 
         $privateCommands = [
             'stats', 'leaderboard', 'report', 'reportcsv', 'exportgsheet', 'summary',
-            'setbudget', 'settimezone', 'setactivity', 'autoreport', 'autoprogress', 'progress', 'mychats',
+            'setbudget', 'settimezone', 'setactivity', 'autoreport', 'autoprogress', 'progress', 'forecast', 'mychats',
             'usechat', 'modadd', 'modremove', 'modlist',
             'plan', 'setplan', 'coach', 'health', 'trend', 'execsummary', 'archive',
             'rosteradd', 'rosterremove', 'rosterlist', 'rosterrole',
@@ -247,6 +247,14 @@ class UpdateHandler
             'mydashboard', 'goalset', 'goalstatus', 'goalclear', 'autofeedback',
         ];
         $moderationCommands = ['warn', 'mute', 'ban', 'unmute', 'unban', 'mod'];
+
+        if (!$isPrivate) {
+            return;
+        }
+
+        if (!$this->isManager($userId)) {
+            return;
+        }
 
         if ($isPrivate) {
             if (in_array($command, ['help', 'start'], true)) {
@@ -401,6 +409,9 @@ class UpdateHandler
                     case 'progress':
                         $this->handleProgressReport($chatId, $targetChatId, $cleanArgs);
                         return;
+                    case 'forecast':
+                        $this->handleForecast($chatId, $targetChatId, $cleanArgs);
+                        return;
                     case 'debughours':
                         $this->handleDebugHours($chatId, $targetChatId, $message, $cleanArgs);
                         return;
@@ -470,22 +481,6 @@ class UpdateHandler
 
             return;
         }
-
-        // Group chat behavior
-        if (in_array($command, ['help', 'start'], true)) {
-            $this->tg->sendMessage($chatId, $this->helpText(false), ['parse_mode' => 'HTML']);
-            return;
-        }
-
-        if (in_array($command, $privateCommands, true)) {
-            $this->tg->sendMessage($chatId, 'Please DM me to use analytics commands.', ['parse_mode' => 'HTML']);
-            return;
-        }
-
-        if (in_array($command, $moderationCommands, true)) {
-            $this->tg->sendMessage($chatId, 'Moderation commands are disabled in this bot. It only handles analytics and rewards.', ['parse_mode' => 'HTML']);
-            return;
-        }
     }
 
     private function handleStats(int|string $responseChatId, int|string $chatId, array $message, string $args): void
@@ -516,7 +511,7 @@ class UpdateHandler
 
         $stats = $this->stats->getMonthlyStats($chatId, $month);
         if (empty($stats['mods'])) {
-            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd [chat_id] @username in private chat (or /usechat), or /mod add (reply) in the group.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('No mods are configured yet. Use /modadd [chat_id] @username in private chat (or /usechat), or /mod add (reply) in the group.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -533,12 +528,12 @@ class UpdateHandler
         }
 
         if (!$target) {
-            $this->tg->sendMessage($responseChatId, 'Mod not found in this chat.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('Mod not found in this chat.', ['parse_mode' => 'HTML']);
             return;
         }
 
         $text = $this->formatStatsMessage($target, $stats['range']);
-        $this->tg->sendMessage($responseChatId, $text, ['parse_mode' => 'HTML']);
+        $this->sendReportMessage($text, ['parse_mode' => 'HTML']);
     }
 
     private function handleDebugHours(int|string $responseChatId, int|string $chatId, array $message, string $args): void
@@ -569,7 +564,7 @@ class UpdateHandler
 
         $stats = $this->stats->getMonthlyStats($chatId, $month);
         if (empty($stats['mods'])) {
-            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -586,7 +581,7 @@ class UpdateHandler
         }
 
         if (!$target) {
-            $this->tg->sendMessage($responseChatId, 'Mod not found in this chat.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('Mod not found in this chat.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -604,7 +599,7 @@ class UpdateHandler
         $lines[] = 'Days active: ' . number_format((int)($target['days_active'] ?? 0));
         $lines[] = 'Membership minutes (raw) are derived from join/leave events.';
         $lines[] = 'Active minutes (raw) are computed from message timestamps and gap settings.';
-        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
     }
 
     private function handleDebugHoursAll(int|string $responseChatId, int|string $chatId, string $args): void
@@ -623,7 +618,7 @@ class UpdateHandler
 
         $stats = $this->stats->getMonthlyStats($chatId, $month);
         if (empty($stats['mods'])) {
-            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -647,14 +642,7 @@ class UpdateHandler
         }
 
         $text = implode("\n", $lines);
-        if (strlen($text) > 3500) {
-            $chunks = str_split($text, 3500);
-            foreach ($chunks as $chunk) {
-                $this->tg->sendMessage($responseChatId, $chunk, ['parse_mode' => 'HTML']);
-            }
-            return;
-        }
-        $this->tg->sendMessage($responseChatId, $text, ['parse_mode' => 'HTML']);
+        $this->sendReportMessage($text, ['parse_mode' => 'HTML']);
     }
 
     private function handleTimesheet(int|string $responseChatId, int|string $chatId, array $message, string $args): void
@@ -693,7 +681,7 @@ class UpdateHandler
         }
 
         if ($targetUserId === null && $targetUsername === null) {
-            $this->tg->sendMessage($responseChatId, 'Usage: /timesheet &lt;@username|user_id&gt; [YYYY-MM-DD] [YYYY-MM-DD] [chat_id]', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('Usage: /timesheet &lt;@username|user_id&gt; [YYYY-MM-DD] [YYYY-MM-DD] [chat_id]', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -716,23 +704,23 @@ class UpdateHandler
         }
 
         if (!$startLocal || !$endLocal) {
-            $this->tg->sendMessage($responseChatId, 'Invalid date format. Use YYYY-MM-DD.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('Invalid date format. Use YYYY-MM-DD.', ['parse_mode' => 'HTML']);
             return;
         }
 
         $userRow = $this->findChatUser($chatId, $targetUserId, $targetUsername);
         if (!$userRow) {
-            $this->tg->sendMessage($responseChatId, 'Mod not found in this chat. Use /finduser to locate.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('Mod not found in this chat. Use /finduser to locate.', ['parse_mode' => 'HTML']);
             return;
         }
         if (empty($userRow['is_mod'])) {
-            $this->tg->sendMessage($responseChatId, 'That user is not a mod in this chat.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('That user is not a mod in this chat.', ['parse_mode' => 'HTML']);
             return;
         }
 
         $filePath = $this->timesheetCsv->generate($chatId, (int)$userRow['id'], $this->displayName($userRow), $startLocal, $endLocal);
         $caption = 'Timesheet for ' . $this->displayName($userRow) . ' · ' . $startLocal->format('Y-m-d') . ' to ' . $endLocal->format('Y-m-d') . ' (' . $timezone . ')';
-        $this->tg->sendDocument($responseChatId, $filePath, $caption);
+        $this->sendReportDocument($filePath, $caption);
         if (!$explicitUser && $this->shouldLog('log_commands')) {
             Logger::infoContext('Timesheet generated (self)', $this->logContextForChat($chatId, [
                 'user_id' => $userRow['id'] ?? null,
@@ -789,13 +777,13 @@ class UpdateHandler
         $userBUsername = $second['username'] ?? null;
 
         if (($userAId === null && $userAUsername === null) || ($userBId === null && $userBUsername === null)) {
-            $this->tg->sendMessage($responseChatId, 'Usage: /compare &lt;@user1|id1&gt; &lt;@user2|id2&gt; [YYYY-MM] [chat_id]', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('Usage: /compare &lt;@user1|id1&gt; &lt;@user2|id2&gt; [YYYY-MM] [chat_id]', ['parse_mode' => 'HTML']);
             return;
         }
 
         $stats = $this->stats->getMonthlyStats($chatId, $month);
         if (empty($stats['mods'])) {
-            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -803,7 +791,7 @@ class UpdateHandler
         $modB = $this->findModInStats($stats['mods'], $userBId, $userBUsername);
 
         if (!$modA || !$modB) {
-            $this->tg->sendMessage($responseChatId, 'One or both mods not found in this chat.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('One or both mods not found in this chat.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -842,14 +830,14 @@ class UpdateHandler
                 ' vs ' . ($trendB !== null ? (($trendB >= 0 ? '+' : '') . number_format((float)$trendB, 1) . '%') : 'N/A');
         }
 
-        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
     }
 
     private function handleFindUser(int|string $responseChatId, int|string $chatId, string $args): void
     {
         $query = trim($args);
         if ($query === '' || strtolower($query) === 'help') {
-            $this->tg->sendMessage($responseChatId, 'Usage: /finduser &lt;name|@username|user_id&gt; [chat_id]', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('Usage: /finduser &lt;name|@username|user_id&gt; [chat_id]', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -866,12 +854,12 @@ class UpdateHandler
                 [$chatId, (int)$query]
             );
             if (!$row) {
-                $this->tg->sendMessage($responseChatId, 'No matching user found in this chat.', ['parse_mode' => 'HTML']);
+                $this->sendReportMessage('No matching user found in this chat.', ['parse_mode' => 'HTML']);
                 return;
             }
             $role = !empty($row['is_mod']) ? 'mod' : 'member';
             $line = $row['id'] . ' | ' . $this->displayName($row) . ' | ' . $role;
-            $this->tg->sendMessage($responseChatId, $line, ['parse_mode' => 'HTML']);
+            $this->sendReportMessage($line, ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -893,7 +881,7 @@ class UpdateHandler
         );
 
         if (empty($rows)) {
-            $this->tg->sendMessage($responseChatId, 'No matching users found in this chat.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('No matching users found in this chat.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -902,7 +890,7 @@ class UpdateHandler
             $role = !empty($row['is_mod']) ? 'mod' : 'member';
             $lines[] = $row['id'] . ' | ' . $this->displayName($row) . ' | ' . $role;
         }
-        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
     }
 
     private function handleLeaderboard(int|string $responseChatId, int|string $chatId, string $args): void
@@ -926,7 +914,7 @@ class UpdateHandler
 
         $stats = $this->stats->getMonthlyStats($chatId, $month);
         if (empty($stats['mods'])) {
-            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd [chat_id] @username in private chat (or /usechat), or /mod add (reply) in the group.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('No mods are configured yet. Use /modadd [chat_id] @username in private chat (or /usechat), or /mod add (reply) in the group.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -941,7 +929,7 @@ class UpdateHandler
         $context['actor_id'] = (int)$responseChatId;
         $ranked = $this->rewards->rankAndReward($stats['mods'], $budget, $context);
         $text = $this->formatLeaderboardMessage($ranked, $stats['range'], $budget);
-        $this->tg->sendMessage($responseChatId, $text, ['parse_mode' => 'HTML']);
+        $this->sendReportMessage($text, ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_reports')) {
             Logger::infoContext(
                 'Leaderboard generated',
@@ -975,7 +963,7 @@ class UpdateHandler
 
         $stats = $this->stats->getMonthlyStats($chatId, $month);
         if (empty($stats['mods'])) {
-            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd [chat_id] @username in private chat (or /usechat), or /mod add (reply) in the group.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('No mods are configured yet. Use /modadd [chat_id] @username in private chat (or /usechat), or /mod add (reply) in the group.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -985,7 +973,7 @@ class UpdateHandler
 
         $filePath = $this->rewardSheet->generate($chatId, $month, $budget);
         $caption = 'Reward sheet for ' . $stats['range']['label'] . ' (budget: ' . number_format($budget, 2) . ')';
-        $this->tg->sendDocument($responseChatId, $filePath, $caption);
+        $this->sendReportDocument($filePath, $caption);
         if ($this->shouldLog('log_reports')) {
             Logger::infoContext(
                 'Reward sheet generated',
@@ -1020,7 +1008,7 @@ class UpdateHandler
 
         $stats = $this->stats->getMonthlyStats($chatId, $month);
         if (empty($stats['mods'])) {
-            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd [chat_id] @username in private chat (or /usechat), or /mod add (reply) in the group.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('No mods are configured yet. Use /modadd [chat_id] @username in private chat (or /usechat), or /mod add (reply) in the group.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -1030,7 +1018,7 @@ class UpdateHandler
 
         $filePath = $this->rewardCsv->generate($chatId, $month, $budget);
         $caption = 'CSV reward sheet for ' . $stats['range']['label'] . ' (budget: ' . number_format($budget, 2) . ')';
-        $this->tg->sendDocument($responseChatId, $filePath, $caption);
+        $this->sendReportDocument($filePath, $caption);
         if ($this->shouldLog('log_reports')) {
             Logger::infoContext(
                 'Reward CSV generated',
@@ -1065,7 +1053,7 @@ class UpdateHandler
 
         $chats = $this->getUserChats($userId, 50);
         if (empty($chats)) {
-            $this->tg->sendMessage($responseChatId, 'No group chats found yet. Add me to a group and send a message there.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('No group chats found yet. Add me to a group and send a message there.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -1078,7 +1066,7 @@ class UpdateHandler
         }
 
         if (empty($chatIds)) {
-            $this->tg->sendMessage($responseChatId, 'No authorized chats found for multi-chat summary.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('No authorized chats found for multi-chat summary.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -1090,7 +1078,7 @@ class UpdateHandler
         if ($budget !== null) {
             $caption .= ' (budget: ' . number_format($budget, 2) . ')';
         }
-        $this->tg->sendDocument($responseChatId, $filePath, $caption);
+        $this->sendReportDocument($filePath, $caption);
         if ($this->shouldLog('log_reports')) {
             Logger::infoContext(
                 'Multi-chat summary generated',
@@ -1125,7 +1113,7 @@ class UpdateHandler
 
         $stats = $this->stats->getMonthlyStats($chatId, $month);
         if (empty($stats['mods'])) {
-            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd [chat_id] @username in private chat (or /usechat), or /mod add (reply) in the group.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('No mods are configured yet. Use /modadd [chat_id] @username in private chat (or /usechat), or /mod add (reply) in the group.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -1175,7 +1163,7 @@ class UpdateHandler
 
         $result = $this->googleSheets->export($payload);
         if ($result['ok']) {
-            $this->tg->sendMessage($responseChatId, 'Exported to Google Sheets successfully.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('Exported to Google Sheets successfully.', ['parse_mode' => 'HTML']);
             if ($this->shouldLog('log_reports')) {
                 Logger::infoContext(
                     'Google Sheets export completed',
@@ -1188,7 +1176,7 @@ class UpdateHandler
             }
         } else {
             $error = $result['error'] ?? 'unknown error';
-            $this->tg->sendMessage($responseChatId, 'Google Sheets export failed: ' . $this->escape((string)$error), ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('Google Sheets export failed: ' . $this->escape((string)$error), ['parse_mode' => 'HTML']);
             Logger::errorContext(
                 'Google Sheets export failed',
                 $this->logContextForChat($chatId, [
@@ -1273,7 +1261,7 @@ class UpdateHandler
         foreach ($mods as $mod) {
             $lines[] = $mod['id'] . ' | ' . $this->displayName($mod);
         }
-        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_commands')) {
             Logger::infoContext('Mod list viewed', $this->logContextForChat($chatId, ['mods' => count($mods)]));
         }
@@ -1293,7 +1281,7 @@ class UpdateHandler
             'Tip: owners can upgrade with /setplan premium 30',
             'Managers can gift with /giftplan &lt;chat_id&gt; premium 30',
         ];
-        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
         if ($this->shouldLog('log_commands')) {
             Logger::infoContext('Plan viewed', $this->logContextForChat($chatId, [
                 'plan' => $plan,
@@ -1483,7 +1471,7 @@ class UpdateHandler
         if (!empty($status['approved_at'])) {
             $lines[] = 'Approved at: ' . $this->escape($status['approved_at']);
         }
-        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
     }
 
     private function handleAuditLogCsv(int|string $responseChatId, string $args, int|string $userId): void
@@ -1620,7 +1608,7 @@ class UpdateHandler
         } else {
             $lines[] = 'No plan matched. Update payments tiers in config.';
         }
-        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
     }
 
     private function handlePaymentStatus(int|string $responseChatId, int|string $userId): void
@@ -1981,7 +1969,7 @@ class UpdateHandler
 
         $file = $this->trendReport->generate($chatId, $month, $budget);
         $caption = 'Trend report for ' . $stats['range']['label'];
-        $this->tg->sendDocument($responseChatId, $file, $caption);
+        $this->sendReportDocument($file, $caption);
         if ($this->shouldLog('log_reports')) {
             Logger::infoContext(
                 'Trend report generated',
@@ -2019,7 +2007,7 @@ class UpdateHandler
 
         $file = $this->executiveSummary->generate($chatId, $month, $budget);
         $caption = 'Executive summary for ' . $stats['range']['label'];
-        $this->tg->sendDocument($responseChatId, $file, $caption);
+        $this->sendReportDocument($file, $caption);
         if ($this->shouldLog('log_reports')) {
             Logger::infoContext(
                 'Executive summary generated',
@@ -2036,14 +2024,14 @@ class UpdateHandler
     {
         $rows = $this->archive->list((int)$chatId, null, 8);
         if (empty($rows)) {
-            $this->tg->sendMessage($responseChatId, 'No archived reports yet.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('No archived reports yet.', ['parse_mode' => 'HTML']);
             return;
         }
         $lines = ['Recent archived reports:'];
         foreach ($rows as $row) {
             $lines[] = $row['month'] . ' | ' . $row['report_type'] . ' | ' . basename($row['file_path']);
         }
-        $this->tg->sendMessage($responseChatId, implode("\n", $lines), ['parse_mode' => 'HTML']);
+        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
     }
 
     private function handlePremiumBenefits(int|string $responseChatId, int|string $chatId): void
@@ -2906,7 +2894,7 @@ class UpdateHandler
             return;
         }
         if (!$this->isManager($userId)) {
-            $this->tg->sendMessage($responseChatId, 'Only bot managers or owners can send AI performance reviews.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('Only bot managers or owners can send AI performance reviews.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -2924,7 +2912,7 @@ class UpdateHandler
 
         $report = $this->performanceReview->buildReport($chatId, $month);
         if (empty($report['reviews'])) {
-            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -2932,16 +2920,7 @@ class UpdateHandler
         $chatTitle = $chatRow['title'] ?? ('Chat ' . $chatId);
         $lines = $this->performanceReview->buildLines($report, $chatTitle);
 
-        $targets = $this->getManagerTargets();
-        if (empty($targets)) {
-            $this->tg->sendMessage($responseChatId, 'No managers configured in config.local.php (manager_user_ids).', ['parse_mode' => 'HTML']);
-            return;
-        }
-
-        $this->sendChunkedMessageToTargets($targets, implode("\n", $lines));
-        if (!in_array((int)$responseChatId, $targets, true)) {
-            $this->tg->sendMessage($responseChatId, 'AI performance review sent to managers.', ['parse_mode' => 'HTML']);
-        }
+        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
 
         if ($this->shouldLog('log_reports')) {
             Logger::infoContext(
@@ -3023,7 +3002,7 @@ class UpdateHandler
             return;
         }
         if (!$this->isManager($userId)) {
-            $this->tg->sendMessage($responseChatId, 'Only bot managers or owners can send retention alerts.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('Only bot managers or owners can send retention alerts.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -3046,7 +3025,7 @@ class UpdateHandler
 
         $report = $this->retentionRisk->buildReport($chatId, $month, $threshold);
         if ($report['status'] === 'no_mods') {
-            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -3054,16 +3033,7 @@ class UpdateHandler
         $chatTitle = $chatRow['title'] ?? ('Chat ' . $chatId);
         $lines = $this->retentionRisk->buildLines($report, $chatTitle);
 
-        $targets = $this->getManagerTargets();
-        if (empty($targets)) {
-            $this->tg->sendMessage($responseChatId, 'No managers configured in config.local.php (manager_user_ids).', ['parse_mode' => 'HTML']);
-            return;
-        }
-
-        $this->sendChunkedMessageToTargets($targets, implode("\n", $lines));
-        if (!in_array((int)$responseChatId, $targets, true)) {
-            $this->tg->sendMessage($responseChatId, 'Retention alerts sent to managers.', ['parse_mode' => 'HTML']);
-        }
+        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
 
         if ($this->shouldLog('log_reports')) {
             Logger::infoContext(
@@ -3079,7 +3049,7 @@ class UpdateHandler
     private function handleWeeklySummaryManual(int|string $responseChatId, int|string $chatId, string $args, int|string $userId): void
     {
         if (!$this->isManager($userId)) {
-            $this->tg->sendMessage($responseChatId, 'Only bot managers or owners can send weekly summaries.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('Only bot managers or owners can send weekly summaries.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -3097,27 +3067,16 @@ class UpdateHandler
 
         $stats = $this->stats->getRollingStats($chatId, $days);
         if (empty($stats['mods'])) {
-            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
             return;
         }
 
         $lines = $this->buildWeeklySummaryLines($chatId, $stats, $days);
         $tldr = $this->buildWeeklySummaryTldr($chatId, $stats, $days);
-        $targets = $this->getManagerTargets();
-        if (empty($targets)) {
-            $this->tg->sendMessage($responseChatId, 'No managers configured in config.local.php (manager_user_ids).', ['parse_mode' => 'HTML']);
-            return;
-        }
-
         if ($tldr !== '') {
-            foreach ($targets as $managerId) {
-                $this->tg->sendMessage($managerId, $tldr, ['parse_mode' => 'HTML']);
-            }
+            $this->sendReportMessage($tldr, ['parse_mode' => 'HTML']);
         }
-        $this->sendChunkedMessageToTargets($targets, implode("\n", $lines));
-        if (!in_array((int)$responseChatId, $targets, true)) {
-            $this->tg->sendMessage($responseChatId, 'Weekly summary sent to managers.', ['parse_mode' => 'HTML']);
-        }
+        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
     }
 
     private function handleAutoSpike(int|string $responseChatId, int|string $chatId, string $args, int|string $userId): void
@@ -3186,11 +3145,13 @@ class UpdateHandler
         $parts = preg_split('/\s+/', trim($args));
         $action = strtolower($parts[0] ?? 'status');
         $settings = $this->settings->get($chatId);
+        $allowModDms = (bool)($this->config['reports']['send_to_mods'] ?? false);
 
         if ($action === '' || $action === 'status') {
             $status = !empty($settings['daily_feedback_enabled']) ? 'ON' : 'OFF';
             $hour = (int)($settings['daily_feedback_hour'] ?? 20);
-            $this->tg->sendMessage($responseChatId, 'Daily micro-feedback: ' . $status . ' | Hour ' . $hour . ':00.', ['parse_mode' => 'HTML']);
+            $note = $allowModDms ? '' : ' (mod DMs disabled)';
+            $this->tg->sendMessage($responseChatId, 'Daily micro-feedback: ' . $status . ' | Hour ' . $hour . ':00' . $note . '.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -3202,6 +3163,9 @@ class UpdateHandler
             }
             $this->settings->updateDailyFeedback($chatId, true, $hour);
             $this->tg->sendMessage($responseChatId, 'Daily micro-feedback enabled.', ['parse_mode' => 'HTML']);
+            if (!$allowModDms) {
+                $this->tg->sendMessage($responseChatId, 'Note: mod DMs are disabled. Set reports.send_to_mods=true to deliver feedback.', ['parse_mode' => 'HTML']);
+            }
             if ($this->shouldLog('log_commands')) {
                 Logger::infoContext('Daily micro-feedback enabled', $this->logContextForChat($chatId, [
                     'hour' => $hour,
@@ -3985,7 +3949,7 @@ class UpdateHandler
     private function handleActivityRank(int|string $responseChatId, int|string $chatId, string $args, int|string $userId): void
     {
         if (!$this->isManager($userId)) {
-            $this->tg->sendMessage($responseChatId, 'Only bot managers or owners can send activity rankings.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('Only bot managers or owners can send activity rankings.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -4008,7 +3972,7 @@ class UpdateHandler
 
         $stats = $this->stats->getMonthlyStats($chatId, $month);
         if (empty($stats['mods'])) {
-            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -4036,16 +4000,8 @@ class UpdateHandler
             $rank++;
         }
 
-        $targets = $this->getManagerTargets();
-        if (empty($targets)) {
-            $this->tg->sendMessage($responseChatId, 'No managers configured in config.local.php (manager_user_ids).', ['parse_mode' => 'HTML']);
-            return;
-        }
-
         $message = implode("\n", $lines);
-        foreach ($targets as $managerId) {
-            $this->tg->sendMessage($managerId, $message, ['parse_mode' => 'HTML']);
-        }
+        $this->sendReportMessage($message, ['parse_mode' => 'HTML']);
     }
 
     private function buildActivityRanks(array $mods, int $topN): array
@@ -4122,7 +4078,7 @@ class UpdateHandler
 
         $bundle = $this->stats->getMonthToDateStats($chatId);
         if (empty($bundle['mods'])) {
-            $this->tg->sendMessage($responseChatId, 'No mods are configured yet. Use /modadd [chat_id] @username in private chat (or /usechat).', ['parse_mode' => 'HTML']);
+            $this->sendReportMessage('No mods are configured yet. Use /modadd [chat_id] @username in private chat (or /usechat).', ['parse_mode' => 'HTML']);
             return;
         }
 
@@ -4133,7 +4089,7 @@ class UpdateHandler
         $suffix = ($bundle['range']['month'] ?? 'mtd') . '-mtd';
         $filePath = $this->rewardSheet->generate($chatId, null, $budget, $bundle, $suffix);
         $caption = 'Progress report (MTD) for ' . $bundle['range']['label'] . ' (budget: ' . number_format($budget, 2) . ')';
-        $this->tg->sendDocument($responseChatId, $filePath, $caption);
+        $this->sendReportDocument($filePath, $caption);
         if ($this->shouldLog('log_reports')) {
             Logger::infoContext(
                 'Progress report generated',
@@ -4143,6 +4099,80 @@ class UpdateHandler
                     'file' => basename($filePath),
                 ])
             );
+        }
+    }
+
+    private function handleForecast(int|string $responseChatId, int|string $chatId, string $args): void
+    {
+        $month = null;
+        $budget = null;
+        $tokens = preg_split('/\\s+/', trim($args));
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if (preg_match('/^\\d{4}-\\d{2}$/', $token)) {
+                $month = $token;
+                continue;
+            }
+            if (is_numeric($token)) {
+                $budget = (float)$token;
+            }
+        }
+
+        $settings = $this->settings->get($chatId);
+        if ($budget === null) {
+            $budget = (float)($settings['reward_budget'] ?? 0);
+        }
+
+        $timezone = $settings['timezone'] ?? ($this->config['timezone'] ?? 'UTC');
+        $tz = new DateTimeZone($timezone);
+        $nowLocal = new DateTimeImmutable('now', $tz);
+        $currentMonthKey = $nowLocal->format('Y-m');
+        if ($month !== null && $month !== $currentMonthKey) {
+            $this->sendReportMessage('Forecast is available for the current month only.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $mtdBundle = $this->stats->getMonthToDateStats($chatId, $nowLocal);
+        if (empty($mtdBundle['mods'])) {
+            $this->sendReportMessage('No mods are configured yet. Use /modadd first.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $lastMonthKey = $nowLocal->modify('first day of last month')->format('Y-m');
+        $lastBundle = $this->stats->getMonthlyStats($chatId, $lastMonthKey);
+        $forecast = $this->buildRewardForecast($mtdBundle, $lastBundle, $budget);
+        if (($forecast['status'] ?? '') !== 'ok') {
+            $this->sendReportMessage('Forecast is unavailable right now.', ['parse_mode' => 'HTML']);
+            return;
+        }
+
+        $chatRow = $this->db->fetch('SELECT title FROM chats WHERE id = ? LIMIT 1', [$chatId]);
+        $chatTitle = $chatRow['title'] ?? ('Chat ' . $chatId);
+        $summary = $mtdBundle['summary'] ?? [];
+        $messages = (int)($summary['messages'] ?? 0);
+        $actions = (int)($summary['warnings'] ?? 0) + (int)($summary['mutes'] ?? 0) + (int)($summary['bans'] ?? 0);
+        $activeHours = ((float)($summary['active_minutes'] ?? 0)) / 60;
+
+        $deltaPct = (float)($forecast['delta_pct'] ?? 0);
+        $deltaLabel = ($deltaPct >= 0 ? '+' : '') . number_format($deltaPct, 1) . '%';
+
+        $lines = [];
+        $lines[] = '<b>Reward Forecast</b>';
+        $lines[] = $this->escape($chatTitle) . ' · ' . $this->escape($mtdBundle['range']['label'] ?? 'MTD');
+        $lines[] = 'Days: ' . (int)$forecast['days_elapsed'] . '/' . (int)$forecast['days_total'] . ' · Pace ' . number_format((float)$forecast['pace_factor'], 2) . 'x';
+        $lines[] = 'MTD: ' . number_format($messages) . ' msgs · ' . number_format($actions) . ' actions · ' . number_format($activeHours, 1) . 'h active';
+        $lines[] = 'Projected: ' . number_format((float)$forecast['projected_messages']) . ' msgs · ' . number_format((float)$forecast['projected_actions']) . ' actions · ' . number_format((float)$forecast['projected_active_hours'], 1) . 'h active';
+        $lines[] = 'Index: ' . number_format((float)$forecast['projected_index'], 1) . ' (baseline ' . number_format((float)$forecast['baseline_index'], 1) . ')';
+        $lines[] = 'Budget: ' . number_format($budget, 2) . ' → ' . number_format((float)$forecast['forecast_budget'], 2) . ' (' . $deltaLabel . ')';
+
+        $this->sendReportMessage(implode("\n", $lines), ['parse_mode' => 'HTML']);
+        if ($this->shouldLog('log_reports')) {
+            Logger::infoContext('Forecast generated', $this->logContextForChat($chatId, [
+                'month' => $currentMonthKey,
+                'budget' => number_format($budget, 2, '.', ''),
+            ]));
         }
     }
 
@@ -4468,6 +4498,8 @@ class UpdateHandler
             return implode("\n", [
                 '<b>SP NET MOD TOOL</b>',
                 'Use these in private chat.',
+                'Reports are delivered to the reports channel + manager DMs.',
+                'The bot stays silent in groups and does not DM mods.',
                 'Tip: set a default chat with /usechat &lt;chat_id&gt; to skip chat ids.',
                 '/mychats - list your group chats',
                 '/usechat &lt;chat_id&gt; | /usechat &lt;title&gt; | /usechat off',
@@ -4487,6 +4519,7 @@ class UpdateHandler
                 '/reportcsv [chat_id] [YYYY-MM] [budget]',
                 '/exportgsheet [chat_id] [YYYY-MM] [budget]',
                 '/summary [YYYY-MM] [budget]',
+                '/forecast [budget]',
                 '/plan',
                 '/setplan &lt;free|premium|enterprise&gt; [days] (owner only)',
                 '/giftplan &lt;chat_id&gt; &lt;free|premium|enterprise&gt; [days] [note] (manager/owner)',
@@ -4561,6 +4594,8 @@ class UpdateHandler
         $parts[] = implode("\n", [
             '<b>SP NET MOD TOOL – Usage Guide (1/3)</b>',
             'All commands are used in <b>private chat</b> with the bot.',
+            'Reports are sent to the <b>reports channel</b> and to managers.',
+            'The bot stays silent in groups and does not DM mods.',
             '',
             '<b>Step 1: Add bot to groups</b>',
             '1) Add bot to the group',
@@ -4624,6 +4659,7 @@ class UpdateHandler
             '<b>Mid-month progress</b>',
             '<code>/progress</code>',
             '<code>/progress 7500</code>',
+            '<code>/forecast</code> (reward forecast for current month)',
             '',
             '<b>Multi-chat summary</b>',
             '<code>/summary 2026-02 12000</code>',
@@ -4640,6 +4676,10 @@ class UpdateHandler
             '<code>/autoretention on 2 10 30%</code> (retention drop alerts)',
             '<code>/autospike on 10 35%</code> (inactivity spike alerts)',
             '<code>/autofeedback on 20</code> (daily micro-feedback DMs)',
+            '',
+            '<b>Report delivery</b>',
+            'Set <code>reports.channel_id</code> in config.local.php to your reports-only channel.',
+            'Reports go to that channel + manager DMs. Mod DMs are disabled by default.',
             '',
             '<b>Approvals + audit log</b>',
             '<code>/approval on</code>',
@@ -4682,40 +4722,68 @@ class UpdateHandler
         return $parts;
     }
 
-    private function sendChunkedMessageToTargets(array $targets, string $text, int $limit = 3500): void
+    private function buildActivityIndex(array $summary): float
     {
-        if (empty($targets)) {
-            return;
-        }
-        $lines = explode("\n", $text);
-        $chunks = [];
-        $current = '';
-        foreach ($lines as $line) {
-            $candidate = $current === '' ? $line : $current . "\n" . $line;
-            if (strlen($candidate) > $limit) {
-                if ($current !== '') {
-                    $chunks[] = $current;
-                    $current = $line;
-                    continue;
-                }
-                $longParts = str_split($line, $limit);
-                foreach ($longParts as $part) {
-                    $chunks[] = $part;
-                }
-                $current = '';
-                continue;
-            }
-            $current = $candidate;
-        }
-        if ($current !== '') {
-            $chunks[] = $current;
+        $messages = (float)($summary['messages'] ?? 0);
+        $actions = (float)($summary['warnings'] ?? 0) + (float)($summary['mutes'] ?? 0) + (float)($summary['bans'] ?? 0);
+        $activeHours = ((float)($summary['active_minutes'] ?? 0)) / 60;
+
+        $weights = $this->config['forecast_weights'] ?? [];
+        $defaults = [
+            'messages' => 1.0,
+            'actions' => 3.0,
+            'active_hours' => 0.5,
+        ];
+        $weights = array_merge($defaults, is_array($weights) ? $weights : []);
+
+        return ($messages * (float)$weights['messages'])
+            + ($actions * (float)$weights['actions'])
+            + ($activeHours * (float)$weights['active_hours']);
+    }
+
+    private function buildRewardForecast(array $mtdBundle, array $lastBundle, float $budget): array
+    {
+        $mtdSummary = $mtdBundle['summary'] ?? [];
+        $lastSummary = $lastBundle['summary'] ?? [];
+
+        $currentIndex = $this->buildActivityIndex($mtdSummary);
+        $baselineIndex = $this->buildActivityIndex($lastSummary);
+
+        $range = $mtdBundle['range'] ?? [];
+        $startLocal = $range['start_local'] ?? null;
+        $endLocal = $range['end_local'] ?? null;
+        if (!$startLocal instanceof DateTimeImmutable || !$endLocal instanceof DateTimeImmutable) {
+            return [
+                'status' => 'invalid_range',
+            ];
         }
 
-        foreach ($targets as $targetId) {
-            foreach ($chunks as $chunk) {
-                $this->tg->sendMessage($targetId, $chunk, ['parse_mode' => 'HTML']);
-            }
-        }
+        $daysElapsed = max(1, (int)$startLocal->diff($endLocal)->days + 1);
+        $daysTotal = max(1, (int)$startLocal->diff($startLocal->modify('first day of next month'))->days);
+        $paceFactor = $daysTotal / $daysElapsed;
+
+        $projectedMessages = (float)($mtdSummary['messages'] ?? 0) * $paceFactor;
+        $projectedActions = ((float)($mtdSummary['warnings'] ?? 0) + (float)($mtdSummary['mutes'] ?? 0) + (float)($mtdSummary['bans'] ?? 0)) * $paceFactor;
+        $projectedActiveHours = (((float)($mtdSummary['active_minutes'] ?? 0)) / 60) * $paceFactor;
+        $projectedIndex = $currentIndex * $paceFactor;
+
+        $baselineIndex = $baselineIndex > 0 ? $baselineIndex : ($currentIndex > 0 ? $currentIndex : 1.0);
+        $forecastBudget = $budget > 0 ? $budget * ($projectedIndex / $baselineIndex) : 0.0;
+        $deltaPct = $budget > 0 ? (($forecastBudget - $budget) / $budget) * 100 : 0.0;
+
+        return [
+            'status' => 'ok',
+            'days_elapsed' => $daysElapsed,
+            'days_total' => $daysTotal,
+            'pace_factor' => $paceFactor,
+            'projected_messages' => $projectedMessages,
+            'projected_actions' => $projectedActions,
+            'projected_active_hours' => $projectedActiveHours,
+            'projected_index' => $projectedIndex,
+            'baseline_index' => $baselineIndex,
+            'forecast_budget' => $forecastBudget,
+            'delta_pct' => $deltaPct,
+        ];
     }
 
     private function findChatUser(int|string $chatId, ?int $userId, ?string $username): ?array
@@ -4922,6 +4990,16 @@ class UpdateHandler
         $name = trim(($user['first_name'] ?? '') . ' ' . ($user['last_name'] ?? ''));
         $value = $name !== '' ? $name : 'User ' . $user['id'];
         return $this->escape($value);
+    }
+
+    private function sendReportMessage(string $text, array $options = [], int $limit = 3500): void
+    {
+        $this->reporter->sendMessage($text, $options, $limit);
+    }
+
+    private function sendReportDocument(string $filePath, string $caption = '', array $options = []): void
+    {
+        $this->reporter->sendDocument($filePath, $caption, $options);
     }
 
     private function escape(string $value): string
