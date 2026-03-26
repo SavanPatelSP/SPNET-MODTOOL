@@ -69,7 +69,7 @@ class SettingsService
 
         $this->db->exec(
             'INSERT INTO settings (chat_id, reward_budget, timezone, active_gap_minutes, active_floor_minutes, auto_report_enabled, auto_report_day, auto_report_hour, progress_report_enabled, progress_report_day, progress_report_hour, weekly_summary_enabled, weekly_summary_weekday, weekly_summary_hour, inactivity_alert_enabled, inactivity_alert_days, inactivity_alert_hour, ai_review_enabled, ai_review_day, ai_review_hour, retention_alert_enabled, retention_alert_day, retention_alert_hour, retention_threshold, inactivity_spike_enabled, inactivity_spike_hour, inactivity_spike_threshold, daily_feedback_enabled, daily_feedback_hour, approval_required, updated_at)
-             VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+             VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [$chatId, $timezone, $gap, $floor, $autoEnabled, $autoDay, $autoHour, $progressEnabled, $progressDay, $progressHour, $weeklyEnabled, $weeklyWeekday, $weeklyHour, $inactiveEnabled, $inactiveDays, $inactiveHour, $aiEnabled, $aiDay, $aiHour, $retentionEnabled, $retentionDay, $retentionHour, $retentionThreshold, $spikeEnabled, $spikeHour, $spikeThreshold, $feedbackEnabled, $feedbackHour, $approvalRequired, $this->nowUtc()]
         );
 
